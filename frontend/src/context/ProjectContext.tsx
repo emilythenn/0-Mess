@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Member, Task, Commit, FeedbackSubmission, MeetingPoll, Event, Notification, TaskStatus, Group } from '../types';
+import { Member, Task, Commit, FeedbackSubmission, MeetingPoll, Event, Notification, TaskStatus, TaskPriority, Group } from '../types';
 import { MOCK_MEMBERS, INITIAL_TASKS, INITIAL_COMMITS, INITIAL_FEEDBACK, INITIAL_POLLS, INITIAL_EVENTS, INITIAL_NOTIFICATIONS, CURRENT_USER } from '../data/mockData';
 import { supabase } from '../supabase';
 
@@ -51,6 +51,94 @@ export const useProject = () => {
   if (!context) throw new Error('useProject must be used within a ProjectProvider');
   return context;
 };
+
+// =========================================================================
+// Supabase Database -> Frontend React Model Mapping Helpers
+// =========================================================================
+
+const mapDbTaskToTask = (dbTask: any): Task => ({
+  id: dbTask.id,
+  title: dbTask.title,
+  description: dbTask.description || '',
+  status: dbTask.status as TaskStatus,
+  priority: dbTask.priority as TaskPriority,
+  assignees: dbTask.assignees || [],
+  dueDate: dbTask.due_date || '',
+  tags: dbTask.tags || [],
+  groupId: dbTask.group_id
+});
+
+const mapDbCommitToCommit = (dbCommit: any): Commit => ({
+  id: dbCommit.id,
+  memberId: dbCommit.member_id,
+  authorName: dbCommit.author_name,
+  title: dbCommit.title,
+  description: dbCommit.description || '',
+  type: dbCommit.type,
+  linesAdded: dbCommit.lines_added || 0,
+  timestamp: dbCommit.timestamp,
+  attachment: dbCommit.attachment || undefined,
+  groupId: dbCommit.group_id
+});
+
+const mapDbFeedbackToFeedback = (dbFeedback: any): FeedbackSubmission => ({
+  id: dbFeedback.id,
+  fromAnonymousId: dbFeedback.from_anonymous_id,
+  toMemberId: dbFeedback.to_member_id,
+  ratingQuality: dbFeedback.rating_quality,
+  ratingReliability: dbFeedback.rating_reliability,
+  ratingCommunication: dbFeedback.rating_communication,
+  ratingContribution: dbFeedback.rating_contribution,
+  comment: dbFeedback.comment || '',
+  timestamp: dbFeedback.timestamp,
+  groupId: dbFeedback.group_id
+});
+
+const mapDbPollToPoll = (dbPoll: any): MeetingPoll => {
+  const rawSlots = dbPoll.proposed_slots || [];
+  const proposedSlots = rawSlots.map((s: any) => ({
+    id: s.id || s.slotId || Math.random().toString(),
+    time: s.time || s.slotTime || '',
+    votedMemberIds: s.votedMemberIds || s.voted_member_ids || []
+  }));
+  return {
+    id: dbPoll.id,
+    title: dbPoll.title,
+    description: dbPoll.description || '',
+    proposedSlots,
+    deadline: dbPoll.deadline || '',
+    createdBy: dbPoll.created_by,
+    groupId: dbPoll.group_id
+  };
+};
+
+const mapDbEventToEvent = (dbEvent: any): Event => ({
+  id: dbEvent.id,
+  title: dbEvent.title,
+  time: dbEvent.time,
+  type: dbEvent.type,
+  description: dbEvent.description || '',
+  groupId: dbEvent.group_id,
+  completed: dbEvent.completed || false
+});
+
+const mapDbProfileToMember = (dbProfile: any): Member => ({
+  id: dbProfile.id,
+  name: dbProfile.name,
+  role: dbProfile.role || 'Project Member',
+  email: dbProfile.email || '',
+  avatar: dbProfile.avatar || 'US',
+  color: dbProfile.color || 'bg-indigo-500',
+  contributionScore: 10.0,
+  commitsCount: 0,
+  matricNumber: dbProfile.matric_number,
+  siswaMail: dbProfile.siswa_mail,
+  personalEmail: dbProfile.personal_email,
+  university: dbProfile.university,
+  course: dbProfile.course,
+  currentSemester: dbProfile.current_semester,
+  nationality: dbProfile.nationality
+});
 
 export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [dbError, setDbError] = useState<string | null>(null);
@@ -279,6 +367,161 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, [activeGroupId, isLoggedIn]);
 
+  // Real-Time Sync Engine: Subscribe to active workspace modifications in Supabase Realtime Postgres replication
+  useEffect(() => {
+    if (!activeGroupId || !isLoggedIn) return;
+
+    console.log(`Connecting to Supabase Realtime channel for workspace ${activeGroupId}...`);
+
+    // Connect to Supabase Postgres replication channel for this group
+    const channel = supabase
+      .channel(`realtime:workspace:${activeGroupId}`)
+      // 1. Synchronize tasks changes
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'tasks', filter: `group_id=eq.${activeGroupId}` },
+        (payload) => {
+          console.log('Realtime task change:', payload.eventType, payload);
+          if (payload.eventType === 'INSERT') {
+            const mappedTask = mapDbTaskToTask(payload.new);
+            setTasks(prev => prev.some(t => t.id === mappedTask.id) ? prev : [mappedTask, ...prev]);
+          } else if (payload.eventType === 'UPDATE') {
+            const mappedTask = mapDbTaskToTask(payload.new);
+            setTasks(prev => prev.map(t => t.id === mappedTask.id ? mappedTask : t));
+          } else if (payload.eventType === 'DELETE') {
+            setTasks(prev => prev.filter(t => t.id !== payload.old.id));
+          }
+        }
+      )
+      // 2. Synchronize commits changes
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'commits', filter: `group_id=eq.${activeGroupId}` },
+        (payload) => {
+          console.log('Realtime commit change:', payload.eventType, payload);
+          if (payload.eventType === 'INSERT') {
+            const mappedCommit = mapDbCommitToCommit(payload.new);
+            setCommits(prev => prev.some(c => c.id === mappedCommit.id) ? prev : [mappedCommit, ...prev]);
+          } else if (payload.eventType === 'UPDATE') {
+            const mappedCommit = mapDbCommitToCommit(payload.new);
+            setCommits(prev => prev.map(c => c.id === mappedCommit.id ? mappedCommit : c));
+          } else if (payload.eventType === 'DELETE') {
+            setCommits(prev => prev.filter(c => c.id !== payload.old.id));
+          }
+        }
+      )
+      // 3. Synchronize feedback changes
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'feedback', filter: `group_id=eq.${activeGroupId}` },
+        (payload) => {
+          console.log('Realtime feedback change:', payload.eventType, payload);
+          if (payload.eventType === 'INSERT') {
+            const mappedFb = mapDbFeedbackToFeedback(payload.new);
+            setFeedback(prev => prev.some(f => f.id === mappedFb.id) ? prev : [mappedFb, ...prev]);
+          } else if (payload.eventType === 'UPDATE') {
+            const mappedFb = mapDbFeedbackToFeedback(payload.new);
+            setFeedback(prev => prev.map(f => f.id === mappedFb.id ? mappedFb : f));
+          } else if (payload.eventType === 'DELETE') {
+            setFeedback(prev => prev.filter(f => f.id !== payload.old.id));
+          }
+        }
+      )
+      // 4. Synchronize polls changes
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'polls', filter: `group_id=eq.${activeGroupId}` },
+        (payload) => {
+          console.log('Realtime poll change:', payload.eventType, payload);
+          if (payload.eventType === 'INSERT') {
+            const mappedPoll = mapDbPollToPoll(payload.new);
+            setPolls(prev => prev.some(p => p.id === mappedPoll.id) ? prev : [mappedPoll, ...prev]);
+          } else if (payload.eventType === 'UPDATE') {
+            const mappedPoll = mapDbPollToPoll(payload.new);
+            setPolls(prev => prev.map(p => p.id === mappedPoll.id ? mappedPoll : p));
+          } else if (payload.eventType === 'DELETE') {
+            setPolls(prev => prev.filter(p => p.id !== payload.old.id));
+          }
+        }
+      )
+      // 5. Synchronize events/milestones changes
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'events', filter: `group_id=eq.${activeGroupId}` },
+        (payload) => {
+          console.log('Realtime event change:', payload.eventType, payload);
+          if (payload.eventType === 'INSERT') {
+            const mappedEv = mapDbEventToEvent(payload.new);
+            setEvents(prev => prev.some(e => e.id === mappedEv.id) ? prev : [mappedEv, ...prev]);
+          } else if (payload.eventType === 'UPDATE') {
+            const mappedEv = mapDbEventToEvent(payload.new);
+            setEvents(prev => prev.map(e => e.id === mappedEv.id ? mappedEv : e));
+          } else if (payload.eventType === 'DELETE') {
+            setEvents(prev => prev.filter(e => e.id !== payload.old.id));
+          }
+        }
+      )
+      // 6. Synchronize group membership details changes
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'groups', filter: `id=eq.${activeGroupId}` },
+        (payload) => {
+          console.log('Realtime group change:', payload.eventType, payload);
+          if (payload.eventType === 'UPDATE') {
+            fetchGroupData(activeGroupId);
+          }
+        }
+      )
+      // 7. Synchronize join request/member changes to refresh details
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'group_members', filter: `group_id=eq.${activeGroupId}` },
+        (payload) => {
+          console.log('Realtime group_members change:', payload.eventType, payload);
+          fetchGroupData(activeGroupId);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'group_join_requests', filter: `group_id=eq.${activeGroupId}` },
+        (payload) => {
+          console.log('Realtime group_join_requests change:', payload.eventType, payload);
+          fetchGroupData(activeGroupId);
+        }
+      )
+      // 8. Synchronize profile updates globally
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'profiles' },
+        (payload) => {
+          console.log('Realtime profile change:', payload.eventType, payload);
+          if (payload.eventType === 'UPDATE' || payload.eventType === 'INSERT') {
+            const mappedMember = mapDbProfileToMember(payload.new);
+            setMembers(prev => {
+              const exists = prev.some(m => m.id === mappedMember.id);
+              if (exists) {
+                return prev.map(m => m.id === mappedMember.id ? { ...m, ...mappedMember } : m);
+              } else {
+                return [...prev, mappedMember];
+              }
+            });
+            // Update current user if it is us
+            if (mappedMember.id === currentUser?.id) {
+              setCurrentUser(prev => ({ ...prev, ...mappedMember }));
+            }
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log(`Supabase Realtime subscription status for workspace ${activeGroupId}:`, status);
+      });
+
+    return () => {
+      console.log(`Cleaning up Supabase Realtime channel for workspace ${activeGroupId}`);
+      supabase.removeChannel(channel);
+    };
+  }, [activeGroupId, isLoggedIn, currentUser?.id]);
+
   // Sync state changes to offline local storage fallback cache
   useEffect(() => {
     localStorage.setItem('0mess_groups', JSON.stringify(groups));
@@ -367,7 +610,12 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const signInWithGoogle = async () => {
     try {
       const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google'
+        provider: 'google',
+        options: {
+          queryParams: {
+            prompt: 'select_account'
+          }
+        }
       });
       if (error) throw error;
       return true;

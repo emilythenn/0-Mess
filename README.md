@@ -9,7 +9,7 @@ A centralized, real-time collaboration and accountability platform tailored for 
 * **Unified Course Workspaces**: Create or join project teams using password-secured group codes.
 * **AI & Manual Workload Builder**: Split complex assignment requirements into fair task roles automatically using AI suggestions, or manually configure custom project roles and tasks.
 * **Teammate Claim Coordination**: Select and claim workspace roles to dynamically populate personal task checklists on the group Kanban board.
-* **Semantic AI Workspace Helper (RAG)**: Upload lecture notes, rubrics, or codebase files to let the workspace AI parse, index, and answer project-specific queries using vector embeddings.
+* **Semantic AI Workspace Helper (RAG)**: Upload lecture notes, rubrics, or other files to let the workspace AI parse, index, and answer project-specific queries using vector embeddings.
 * **Milestone-Driven Overview**: Keep project completion percentages realistic by focusing overview meters strictly on milestone completions (filtering out minor deadlines or meetings).
 * **Anonymous Peer Evaluations**: Submit multi-metric peer reviews (quality, reliability, communication, contribution) to coordinate performance scores anonymously.
 * **Academic Student Profiles**: Edit details like matriculation number, siswa/university mail, semester, course, and nationality, displayed in a clean academic grid.
@@ -63,6 +63,18 @@ A centralized, real-time collaboration and accountability platform tailored for 
 1. Create a free project on [Supabase](https://supabase.com).
 2. Go to the **SQL Editor** tab in your Supabase dashboard.
 3. Paste the contents of [supabase_schema.sql](backend/supabase_schema.sql) and run the script. This creates the required tables (`profiles`, `groups`, `tasks`, etc.) and sets up the vector search similarity index.
+4. **Enable Real-Time Replication**: To unlock Notion/Trello-like instant sync, enable postgres replication on your tables by running the following SQL script in your Supabase SQL Editor:
+   ```sql
+   alter publication supabase_realtime add table tasks;
+   alter publication supabase_realtime add table commits;
+   alter publication supabase_realtime add table feedback;
+   alter publication supabase_realtime add table polls;
+   alter publication supabase_realtime add table events;
+   alter publication supabase_realtime add table profiles;
+   alter publication supabase_realtime add table group_members;
+   alter publication supabase_realtime add table group_join_requests;
+   ```
+
 
 ### 2. Environment Variables Configuration
 
