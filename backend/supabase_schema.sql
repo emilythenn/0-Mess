@@ -97,19 +97,20 @@ create table groups (
   description text,
   password text,
   owner_id text references profiles(id) on delete set null,
+  evaluation_date text,
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
 -- Table to map members to groups
 create table group_members (
-  group_id text references groups(id) on delete cascade,
+  group_id text references groups(id) on delete cascade on update cascade,
   user_id text references profiles(id) on delete cascade,
   primary key (group_id, user_id)
 );
 
 -- Table for pending group join requests
 create table group_join_requests (
-  group_id text references groups(id) on delete cascade,
+  group_id text references groups(id) on delete cascade on update cascade,
   user_id text references profiles(id) on delete cascade,
   user_name text not null,
   user_email text not null,
@@ -120,7 +121,7 @@ create table group_join_requests (
 -- Table for Kanban tasks
 create table tasks (
   id text primary key,
-  group_id text references groups(id) on delete cascade,
+  group_id text references groups(id) on delete cascade on update cascade,
   title text not null,
   description text,
   status text not null default 'NOT_STARTED', -- 'NOT_STARTED', 'IN_PROGRESS', 'COMPLETED'
@@ -134,7 +135,7 @@ create table tasks (
 -- Table for git commits / progress updates logs
 create table commits (
   id text primary key,
-  group_id text references groups(id) on delete cascade,
+  group_id text references groups(id) on delete cascade on update cascade,
   member_id text references profiles(id) on delete cascade,
   author_name text not null,
   title text not null,
@@ -148,7 +149,7 @@ create table commits (
 -- Table for peer feedback submission entries
 create table feedback (
   id text primary key,
-  group_id text references groups(id) on delete cascade,
+  group_id text references groups(id) on delete cascade on update cascade,
   from_anonymous_id text not null,
   to_member_id text references profiles(id) on delete cascade,
   rating_quality integer not null,
@@ -162,7 +163,7 @@ create table feedback (
 -- Table for meeting poll availability coordination
 create table polls (
   id text primary key,
-  group_id text references groups(id) on delete cascade,
+  group_id text references groups(id) on delete cascade on update cascade,
   title text not null,
   description text,
   proposed_slots jsonb default '[]'::jsonb, -- array of {id, time, votedMemberIds[]}
@@ -174,7 +175,7 @@ create table polls (
 -- Table for calendar events & milestones
 create table events (
   id text primary key,
-  group_id text references groups(id) on delete cascade,
+  group_id text references groups(id) on delete cascade on update cascade,
   title text not null,
   time text not null,
   type text not null, -- 'deadline', 'meeting', 'milestone'

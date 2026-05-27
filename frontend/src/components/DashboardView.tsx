@@ -1,26 +1,30 @@
 import React, { useState } from 'react';
 import { useProject } from '../context/ProjectContext';
-import { Search, Plus, ArrowRight, Lock, Users, HelpCircle, FileText, CheckCircle, ArrowLeft } from 'lucide-react';
+import { Search, Plus, ArrowRight, Lock, Users, HelpCircle, FileText, CheckCircle, ArrowLeft, AlertCircle, RefreshCw, WifiOff } from 'lucide-react';
 
 interface DashboardViewProps {
   onNavigate?: (tab: string) => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = () => {
-  const { groups, createGroup, joinGroupRequest, setActiveGroupId, currentUser } = useProject();
+  const { groups, createGroup, joinGroupRequest, setActiveGroupId, currentUser, dbError, pendingActionsCount } = useProject();
   const [searchQuery, setSearchQuery] = useState<string>('');
   
   // Create group modal/form state
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
+  const [newGroupId, setNewGroupId] = useState<string>('');
   const [newGroupName, setNewGroupName] = useState<string>('');
   const [newGroupDesc, setNewGroupDesc] = useState<string>('');
   const [newGroupPass, setNewGroupPass] = useState<string>('');
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createSuggestions, setCreateSuggestions] = useState<string[]>([]);
   
   // Join group state
   const [showJoinModal, setShowJoinModal] = useState<boolean>(false);
   const [joinGroupId, setJoinGroupId] = useState<string>('');
   const [joinGroupPass, setJoinGroupPass] = useState<string>('');
   const [joinMessage, setJoinMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [passwordRequired, setPasswordRequired] = useState<boolean>(false);
 
   // Filter groups by query
   const filteredGroups = groups.filter(g => 
@@ -29,30 +33,47 @@ export const DashboardView: React.FC<DashboardViewProps> = () => {
     g.description.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const handleCreateSubmit = (e: React.FormEvent) => {
+  const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newGroupName.trim() || !newGroupDesc.trim()) return;
-    createGroup(newGroupName, newGroupDesc, newGroupPass);
-    // Reset state
-    setNewGroupName('');
-    setNewGroupDesc('');
-    setNewGroupPass('');
-    setShowCreateModal(false);
+    if (!newGroupId.trim() || !newGroupName.trim() || !newGroupDesc.trim()) return;
+    setCreateError(null);
+    setCreateSuggestions([]);
+
+    try {
+      await createGroup(newGroupId, newGroupName, newGroupDesc, newGroupPass);
+      // Reset state
+      setNewGroupId('');
+      setNewGroupName('');
+      setNewGroupDesc('');
+      setNewGroupPass('');
+      setShowCreateModal(false);
+    } catch (err: any) {
+      setCreateError(err.message || 'Failed to create group.');
+      if (err.suggestions) {
+        setCreateSuggestions(err.suggestions);
+      }
+    }
   };
 
   const handleJoinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!joinGroupId.trim()) return;
     try {
-      const res = await joinGroupRequest(joinGroupId, joinGroupPass);
+      const res = await joinGroupRequest(joinGroupId, passwordRequired ? joinGroupPass : undefined);
       if (res.success) {
-        setJoinMessage({ type: 'success', text: res.message });
-        setTimeout(() => {
-          setJoinMessage(null);
-          setJoinGroupId('');
-          setJoinGroupPass('');
-          setShowJoinModal(false);
-        }, 3000);
+        if (res.passwordRequired) {
+          setPasswordRequired(true);
+          setJoinMessage(null); // Clear previous errors
+        } else {
+          setJoinMessage({ type: 'success', text: res.message || 'Joined group successfully!' });
+          setTimeout(() => {
+            setJoinMessage(null);
+            setJoinGroupId('');
+            setJoinGroupPass('');
+            setPasswordRequired(false);
+            setShowJoinModal(false);
+          }, 3000);
+        }
       } else {
         setJoinMessage({ type: 'error', text: res.message });
       }
@@ -64,6 +85,49 @@ export const DashboardView: React.FC<DashboardViewProps> = () => {
   return (
     <div className="p-6 md:p-10 max-w-5xl mx-auto w-full select-none font-sans min-h-screen">
       
+      {/* Offline/Sync Status Banner */}
+      {pendingActionsCount > 0 && (
+        <div className={`border rounded-xl p-3.5 flex items-center justify-between text-xs font-medium mb-4 animate-fade-in shrink-0 ${
+          navigator.onLine 
+            ? 'bg-indigo-50 border-indigo-200 text-indigo-900' 
+            : 'bg-amber-50 border-amber-200 text-amber-900'
+        }`}>
+          <div className="flex items-center space-x-2.5">
+            {navigator.onLine ? (
+              <RefreshCw className="w-5 h-5 text-indigo-600 animate-spin shrink-0" />
+            ) : (
+              <WifiOff className="w-5 h-5 text-amber-600 shrink-0" />
+            )}
+            <div>
+              <span className="font-bold">
+                {navigator.onLine ? 'Synchronizing Updates: ' : 'Offline Mode: '}
+              </span>
+              <span>
+                {navigator.onLine 
+                  ? `Merging ${pendingActionsCount} queued update${pendingActionsCount === 1 ? '' : 's'} with Supabase server...`
+                  : `${pendingActionsCount} update${pendingActionsCount === 1 ? '' : 's'} queued to sync. Changes will save automatically when online.`
+                }
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Top-Level Database Error connection/warning banner */}
+      {dbError && !dbError.includes('Offline Mode') && !dbError.includes('Synchronizing') && !dbError.includes('connection issue') && (
+        <div className="bg-rose-50 border border-rose-200 rounded-xl p-3.5 flex items-center justify-between text-xs text-rose-900 font-medium mb-8 animate-fade-in shrink-0">
+          <div className="flex items-center space-x-2.5">
+            <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+            <div>
+              <span className="font-bold">Cloud Sync Suspended: </span>
+              <span>Database tables missing. Local Storage caching is active. Run </span>
+              <code className="bg-rose-100 px-1 py-0.5 rounded font-mono text-[10px] text-rose-800">backend/supabase_schema.sql</code>
+              <span> in Supabase SQL editor to enable database replication sync.</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Top Welcome Title */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-10">
         <div>
@@ -166,6 +230,29 @@ export const DashboardView: React.FC<DashboardViewProps> = () => {
               <p className="text-[#666666] text-[11px] mt-0.5">Initialise synchronized file links, AI helper state, and Kanban boards.</p>
             </div>
 
+            {createError && (
+              <div className="p-3 bg-red-50 text-red-800 border border-red-150 rounded-xl text-xs mb-4">
+                <p className="font-semibold">{createError}</p>
+                {createSuggestions.length > 0 && (
+                  <div className="mt-2">
+                    <p className="text-red-900 mb-1 text-[10px] uppercase font-mono font-bold">Suggested Available IDs:</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {createSuggestions.map((suggestion) => (
+                        <button
+                          key={suggestion}
+                          type="button"
+                          onClick={() => setNewGroupId(suggestion)}
+                          className="bg-white border border-red-200 text-red-850 hover:bg-red-50 px-2 py-0.5 rounded font-mono text-[10px] font-bold transition-all cursor-pointer"
+                        >
+                          {suggestion}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <form onSubmit={handleCreateSubmit} className="space-y-4">
               <div>
                 <label className="block text-[#111111] text-[10px] font-bold uppercase tracking-wider mb-1 font-mono">Project / Assignment Name</label>
@@ -174,6 +261,18 @@ export const DashboardView: React.FC<DashboardViewProps> = () => {
                   value={newGroupName}
                   onChange={(e) => setNewGroupName(e.target.value)}
                   placeholder="e.g. CS402 Raft Consensus Core"
+                  required
+                  className="w-full bg-[#FAFAFA] border border-[#E5E7EB] rounded-lg p-2.5 text-xs text-[#111111] focus:outline-hidden focus:border-[#4F46E5]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[#111111] text-[10px] font-bold uppercase tracking-wider mb-1 font-mono">Group ID</label>
+                <input 
+                  type="text" 
+                  value={newGroupId}
+                  onChange={(e) => setNewGroupId(e.target.value)}
+                  placeholder="e.g. CS402-G4"
                   required
                   className="w-full bg-[#FAFAFA] border border-[#E5E7EB] rounded-lg p-2.5 text-xs text-[#111111] focus:outline-hidden focus:border-[#4F46E5]"
                 />
@@ -192,7 +291,7 @@ export const DashboardView: React.FC<DashboardViewProps> = () => {
               </div>
 
               <div>
-                <label className="block text-[#111111] text-[10px] font-bold uppercase tracking-wider mb-1 font-mono">Join Password Code (Optional)</label>
+                <label className="block text-[#111111] text-[10px] font-bold uppercase tracking-wider mb-1 font-mono">Group Password (Optional)</label>
                 <input 
                   type="text" 
                   value={newGroupPass}
@@ -205,7 +304,7 @@ export const DashboardView: React.FC<DashboardViewProps> = () => {
               <div className="flex space-x-2 pt-2">
                 <button 
                   type="button" 
-                  onClick={() => setShowCreateModal(false)}
+                  onClick={() => { setShowCreateModal(false); setCreateError(null); setCreateSuggestions([]); }}
                   className="cursor-pointer flex-1 border border-[#E5E7EB] hover:bg-[#FAFAFA] text-[#111111] py-2 text-xs font-semibold rounded-lg"
                 >
                   Cancel
@@ -214,7 +313,7 @@ export const DashboardView: React.FC<DashboardViewProps> = () => {
                   type="submit" 
                   className="cursor-pointer flex-1 bg-[#4F46E5] hover:bg-[#4338CA] text-white py-2 text-xs font-semibold rounded-lg"
                 >
-                  Instantiate Group
+                  Create Group
                 </button>
               </div>
             </form>
@@ -239,32 +338,36 @@ export const DashboardView: React.FC<DashboardViewProps> = () => {
 
             <form onSubmit={handleJoinSubmit} className="space-y-4">
               <div>
-                <label className="block text-[#111111] text-[10px] font-bold uppercase tracking-wider mb-1 font-mono">Workspace ID Code</label>
+                <label className="block text-[#111111] text-[10px] font-bold uppercase tracking-wider mb-1 font-mono">Group ID</label>
                 <input 
                   type="text" 
                   value={joinGroupId}
                   onChange={(e) => setJoinGroupId(e.target.value)}
                   placeholder="e.g. CS415-G2"
                   required
-                  className="w-full bg-[#FAFAFA] border border-[#E5E7EB] rounded-lg p-2.5 text-xs text-[#111111] focus:outline-hidden focus:border-[#4F46E5]"
+                  disabled={passwordRequired}
+                  className="w-full bg-[#FAFAFA] border border-[#E5E7EB] rounded-lg p-2.5 text-xs text-[#111111] focus:outline-hidden focus:border-[#4F46E5] disabled:opacity-60"
                 />
               </div>
 
-              <div>
-                <label className="block text-[#111111] text-[10px] font-bold uppercase tracking-wider mb-1 font-mono">Access Code Suffix</label>
-                <input 
-                  type="password" 
-                  value={joinGroupPass}
-                  onChange={(e) => setJoinGroupPass(e.target.value)}
-                  placeholder="e.g. cloud"
-                  className="w-full bg-[#FAFAFA] border border-[#E5E7EB] rounded-lg p-2.5 text-xs text-[#111111] focus:outline-hidden focus:border-[#4F46E5]"
-                />
-              </div>
+              {passwordRequired && (
+                <div className="animate-fade-in">
+                  <label className="block text-[#111111] text-[10px] font-bold uppercase tracking-wider mb-1 font-mono">Group Password</label>
+                  <input 
+                    type="password" 
+                    value={joinGroupPass}
+                    onChange={(e) => setJoinGroupPass(e.target.value)}
+                    placeholder="e.g. cloud"
+                    required
+                    className="w-full bg-[#FAFAFA] border border-[#E5E7EB] rounded-lg p-2.5 text-xs text-[#111111] focus:outline-hidden focus:border-[#4F46E5]"
+                  />
+                </div>
+              )}
 
               <div className="flex space-x-2 pt-2">
                 <button 
                   type="button" 
-                  onClick={() => { setShowJoinModal(false); setJoinMessage(null); }}
+                  onClick={() => { setShowJoinModal(false); setJoinMessage(null); setJoinGroupId(''); setJoinGroupPass(''); setPasswordRequired(false); }}
                   className="cursor-pointer flex-1 border border-[#E5E7EB] hover:bg-[#FAFAFA] text-[#111111] py-2 text-xs font-semibold rounded-lg"
                 >
                   Cancel
@@ -273,7 +376,7 @@ export const DashboardView: React.FC<DashboardViewProps> = () => {
                   type="submit" 
                   className="cursor-pointer flex-1 bg-[#4F46E5] hover:bg-[#4338CA] text-white py-2 text-xs font-semibold rounded-lg"
                 >
-                  Submit Join Request
+                  {passwordRequired ? "Verify Password & Join" : "Check Group ID"}
                 </button>
               </div>
             </form>

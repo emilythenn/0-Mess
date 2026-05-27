@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Member, Task, Commit, FeedbackSubmission, MeetingPoll, Event, Notification, TaskStatus, TaskPriority, Group } from '../types';
-import { MOCK_MEMBERS, INITIAL_TASKS, INITIAL_COMMITS, INITIAL_FEEDBACK, INITIAL_POLLS, INITIAL_EVENTS, INITIAL_NOTIFICATIONS, CURRENT_USER } from '../data/mockData';
+import { Member, Task, Commit, FeedbackSubmission, MeetingPoll, Event, Notification, TaskStatus, TaskPriority, Group, PendingAction } from '../types';
 import { supabase } from '../supabase';
 
 interface ProjectContextType {
@@ -32,16 +31,22 @@ interface ProjectContextType {
   // Group features
   groups: Group[];
   activeGroupId: string | null;
-  createGroup: (name: string, description: string, password?: string) => Promise<Group>;
-  joinGroupRequest: (groupId: string, password?: string) => Promise<{ success: boolean; message: string; requested?: boolean }>;
+  createGroup: (id: string, name: string, description: string, password?: string) => Promise<Group>;
+  joinGroupRequest: (groupId: string, password?: string) => Promise<{ success: boolean; message: string; requested?: boolean; passwordRequired?: boolean }>;
   approveJoinRequest: (groupId: string, userId: string) => void;
   declineJoinRequest: (groupId: string, userId: string) => void;
   setActiveGroupId: (groupId: string | null) => void;
   resetAllCaches: () => void;
   updateProfile: (profileData: Partial<Member>) => Promise<boolean>;
+  updateGroupEvaluationDate: (groupId: string, evaluationDate: string) => Promise<boolean>;
+  updateGroupSettings: (
+    groupId: string,
+    updates: { name?: string; description?: string; evaluationDate?: string; newGroupId?: string; password?: string }
+  ) => Promise<{ success: boolean; message: string; newGroupId?: string }>;
   
   // Database status
   dbError: string | null;
+  pendingActionsCount: number;
 }
 
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
@@ -142,41 +147,46 @@ const mapDbProfileToMember = (dbProfile: any): Member => ({
 
 export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [dbError, setDbError] = useState<string | null>(null);
+  const [pendingActions, setPendingActions] = useState<PendingAction[]>(() => {
+    const cached = localStorage.getItem('0mess_pending_actions');
+    return cached ? JSON.parse(cached) : [];
+  });
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // States initialized from local storage as offline cache
   const [members, setMembers] = useState<Member[]>(() => {
     const cached = localStorage.getItem('0mess_members');
-    return cached ? JSON.parse(cached) : MOCK_MEMBERS;
+    return cached ? JSON.parse(cached) : [];
   });
 
   const [tasks, setTasks] = useState<Task[]>(() => {
     const cached = localStorage.getItem('0mess_tasks');
-    return cached ? JSON.parse(cached) : INITIAL_TASKS;
+    return cached ? JSON.parse(cached) : [];
   });
 
   const [commits, setCommits] = useState<Commit[]>(() => {
     const cached = localStorage.getItem('0mess_commits');
-    return cached ? JSON.parse(cached) : INITIAL_COMMITS;
+    return cached ? JSON.parse(cached) : [];
   });
 
   const [feedback, setFeedback] = useState<FeedbackSubmission[]>(() => {
     const cached = localStorage.getItem('0mess_feedback');
-    return cached ? JSON.parse(cached) : INITIAL_FEEDBACK;
+    return cached ? JSON.parse(cached) : [];
   });
 
   const [polls, setPolls] = useState<MeetingPoll[]>(() => {
     const cached = localStorage.getItem('0mess_polls');
-    return cached ? JSON.parse(cached) : INITIAL_POLLS;
+    return cached ? JSON.parse(cached) : [];
   });
 
   const [events, setEvents] = useState<Event[]>(() => {
     const cached = localStorage.getItem('0mess_events');
-    return cached ? JSON.parse(cached) : INITIAL_EVENTS;
+    return cached ? JSON.parse(cached) : [];
   });
 
   const [notifications, setNotifications] = useState<Notification[]>(() => {
     const cached = localStorage.getItem('0mess_notifications');
-    return cached ? JSON.parse(cached) : INITIAL_NOTIFICATIONS;
+    return cached ? JSON.parse(cached) : [];
   });
 
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
@@ -185,43 +195,27 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const [currentUser, setCurrentUser] = useState<Member>(() => {
     const cached = localStorage.getItem('0mess_current_user');
-    return cached ? JSON.parse(cached) : CURRENT_USER;
+    return cached ? JSON.parse(cached) : {
+      id: '',
+      name: 'Loading...',
+      role: 'Project Member',
+      email: '',
+      avatar: 'US',
+      color: 'bg-indigo-500',
+      contributionScore: 10.0,
+      commitsCount: 0
+    };
   });
 
   const [groups, setGroups] = useState<Group[]>(() => {
     const cached = localStorage.getItem('0mess_groups');
     if (cached) return JSON.parse(cached);
-    return [
-      {
-        id: 'CS402-G4',
-        name: 'Distributed Systems Group 4',
-        description: 'Collaborative workspace for designing the Raft consensus model logs storage.',
-        password: 'raft',
-        ownerId: 'mem_liam',
-        memberIds: ['user_alex', 'mem_liam', 'mem_sophia', 'mem_ethan', 'mem_mia'],
-        pendingRequests: []
-      },
-      {
-        id: 'CS415-G2',
-        name: 'Cloud Systems Scaling',
-        description: 'Architecture and testing logs for container orchestration simulations.',
-        password: 'cloud',
-        ownerId: 'user_alex',
-        memberIds: ['user_alex', 'mem_sophia'],
-        pendingRequests: [
-          {
-            userId: 'mem_ethan',
-            userName: 'Ethan Chen',
-            userEmail: 'ethan.chen@univ.edu'
-          }
-        ]
-      }
-    ];
+    return [];
   });
 
   const [activeGroupId, setActiveGroupIdState] = useState<string | null>(() => {
     const cached = localStorage.getItem('0mess_active_group_id');
-    return cached !== null ? (cached === 'null' ? null : cached) : 'CS402-G4';
+    return cached !== null ? (cached === 'null' ? null : cached) : null;
   });
 
   const setActiveGroupId = (id: string | null) => {
@@ -263,6 +257,12 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const res = await fetch(`/api/project/groups/${groupId}/data`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (res.status === 404) {
+        console.warn(`Group ${groupId} not found in database. Redirecting to dashboard.`);
+        setActiveGroupId(null);
+        setDbError(null);
+        return;
+      }
       if (!res.ok) throw new Error('Database loading failed.');
       const data = await res.json();
 
@@ -468,6 +468,15 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
         (payload) => {
           console.log('Realtime group change:', payload.eventType, payload);
           if (payload.eventType === 'UPDATE') {
+            const updatedGroup = payload.new;
+            setGroups(prev => prev.map(g => g.id === updatedGroup.id ? {
+              ...g,
+              name: updatedGroup.name,
+              description: updatedGroup.description || '',
+              password: updatedGroup.password || '',
+              ownerId: updatedGroup.owner_id,
+              evaluationDate: updatedGroup.evaluation_date || null
+            } : g));
             fetchGroupData(activeGroupId);
           }
         }
@@ -478,6 +487,31 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
         { event: '*', schema: 'public', table: 'group_members', filter: `group_id=eq.${activeGroupId}` },
         (payload) => {
           console.log('Realtime group_members change:', payload.eventType, payload);
+          if (payload.eventType === 'INSERT') {
+            const newUserId = payload.new.user_id;
+            setGroups(prev => prev.map(g => {
+              if (g.id === activeGroupId) {
+                const already = g.memberIds.includes(newUserId);
+                if (already) return g;
+                return {
+                  ...g,
+                  memberIds: [...g.memberIds, newUserId]
+                };
+              }
+              return g;
+            }));
+          } else if (payload.eventType === 'DELETE') {
+            const deletedUserId = payload.old.user_id;
+            setGroups(prev => prev.map(g => {
+              if (g.id === activeGroupId) {
+                return {
+                  ...g,
+                  memberIds: g.memberIds.filter(id => id !== deletedUserId)
+                };
+              }
+              return g;
+            }));
+          }
           fetchGroupData(activeGroupId);
         }
       )
@@ -486,6 +520,38 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
         { event: '*', schema: 'public', table: 'group_join_requests', filter: `group_id=eq.${activeGroupId}` },
         (payload) => {
           console.log('Realtime group_join_requests change:', payload.eventType, payload);
+          if (payload.eventType === 'INSERT') {
+            const req = payload.new;
+            setGroups(prev => prev.map(g => {
+              if (g.id === activeGroupId) {
+                const already = g.pendingRequests?.some(r => r.userId === req.user_id);
+                if (already) return g;
+                return {
+                  ...g,
+                  pendingRequests: [
+                    ...(g.pendingRequests || []),
+                    {
+                      userId: req.user_id,
+                      userName: req.user_name,
+                      userEmail: req.user_email
+                    }
+                  ]
+                };
+              }
+              return g;
+            }));
+          } else if (payload.eventType === 'DELETE') {
+            const deletedUserId = payload.old.user_id;
+            setGroups(prev => prev.map(g => {
+              if (g.id === activeGroupId) {
+                return {
+                  ...g,
+                  pendingRequests: (g.pendingRequests || []).filter(r => r.userId !== deletedUserId)
+                };
+              }
+              return g;
+            }));
+          }
           fetchGroupData(activeGroupId);
         }
       )
@@ -554,6 +620,10 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
   useEffect(() => {
     localStorage.setItem('0mess_notifications', JSON.stringify(notifications));
   }, [notifications]);
+
+  useEffect(() => {
+    localStorage.setItem('0mess_pending_actions', JSON.stringify(pendingActions));
+  }, [pendingActions]);
 
   // Auth Operations
   const login = async (email: string, password?: string) => {
@@ -625,6 +695,193 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
+  // Generic mutation dispatcher for offline-first action queueing
+  const performMutation = async (
+    type: PendingAction['type'],
+    url: string,
+    method: PendingAction['method'],
+    payload: any
+  ) => {
+    const actionId = `act_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    const newAction: PendingAction = {
+      id: actionId,
+      type,
+      url,
+      method,
+      payload,
+      timestamp: Date.now()
+    };
+
+    // If browser is offline, queue the action and return
+    if (!navigator.onLine) {
+      console.warn('Browser is offline, queueing action:', type);
+      setPendingActions(prev => [...prev, newAction]);
+      setDbError('Offline Mode: Changes are cached locally and will sync when online.');
+      return { queued: true };
+    }
+
+    const token = localStorage.getItem('firebase_id_token');
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok) {
+        const responseText = await res.text();
+        let errorData: any = {};
+        try {
+          errorData = JSON.parse(responseText);
+        } catch (e) {}
+
+        const status = res.status;
+        if (status >= 500) {
+          throw new Error(errorData.error || 'Server error, queueing for retry.');
+        } else {
+          console.error('Client error from server:', errorData.error);
+          return { success: false, error: errorData.error || 'Request rejected by server.' };
+        }
+      }
+
+      setDbError(null);
+      return { success: true };
+    } catch (err: any) {
+      console.warn('Network request failed, queueing action:', err.message);
+      setPendingActions(prev => [...prev, newAction]);
+      setDbError('Database connection issue. Changes are cached locally and will sync when online.');
+      return { queued: true };
+    }
+  };
+
+  // Sync engine to process queue items on network recovery
+  const syncPendingActions = async () => {
+    if (isSyncing || pendingActions.length === 0) return;
+    if (!navigator.onLine) return;
+
+    const token = localStorage.getItem('firebase_id_token');
+    if (!token) return;
+
+    setIsSyncing(true);
+    setDbError('Synchronizing pending local updates...');
+
+    console.log(`Sync engine: processing ${pendingActions.length} queued actions...`);
+    
+    let currentQueue = [...pendingActions];
+    let failed = false;
+
+    while (currentQueue.length > 0 && !failed) {
+      const action = currentQueue[0];
+      try {
+        let finalPayload = { ...action.payload };
+
+        // CONFLICT RESOLUTION / MERGE RULES:
+        if (action.type === 'UPDATE_TASK') {
+          const taskId = action.payload.id;
+          
+          const { data: serverTask, error: fetchErr } = await supabase
+            .from('tasks')
+            .select('*')
+            .eq('id', taskId)
+            .maybeSingle();
+
+          if (!fetchErr && serverTask) {
+            // Last Write Wins (LWW) status resolution
+            const isClientNewer = action.timestamp > Date.parse(serverTask.created_at);
+            
+            if (!isClientNewer) {
+              console.warn(`Sync Conflict on task ${taskId}: Server state is newer. Discarding status update.`);
+              finalPayload.status = serverTask.status;
+            }
+
+            // Description Merge
+            if (serverTask.description && finalPayload.description && serverTask.description !== finalPayload.description) {
+              if (finalPayload.description.trim() !== '') {
+                console.log(`Sync Conflict: Merging description text for task ${taskId}`);
+                finalPayload.description = `${serverTask.description}\n[Merged Update]: ${finalPayload.description}`;
+              }
+            }
+          } else if (!fetchErr && !serverTask) {
+            console.warn(`Sync Conflict: Task ${taskId} was deleted on the server. Discarding pending update.`);
+            currentQueue.shift();
+            continue;
+          }
+        }
+
+        const res = await fetch(action.url, {
+          method: action.method,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify(finalPayload)
+        });
+
+        if (!res.ok) {
+          const status = res.status;
+          if (status >= 500) {
+            throw new Error(`Server returned ${status}`);
+          } else {
+            console.warn(`Sync warning: Action ${action.id} failed with client status ${status}. Discarding from queue.`);
+          }
+        }
+
+        currentQueue.shift();
+        setPendingActions([...currentQueue]);
+      } catch (err: any) {
+        console.warn('Sync engine paused: Network/Server connection down:', err.message);
+        failed = true;
+      }
+    }
+
+    setIsSyncing(false);
+    
+    if (currentQueue.length === 0) {
+      setDbError(null);
+      fetchGroups(token);
+      if (activeGroupId) {
+        fetchGroupData(activeGroupId, token);
+      }
+      addNotification('Offline Sync Completed', 'All queued offline updates have been successfully merged with the database.', 'success');
+    } else {
+      setDbError('Database connection issue. Running in offline Local Storage mode.');
+    }
+  };
+
+  // Trigger sync on recovery
+  useEffect(() => {
+    if (pendingActions.length > 0 && navigator.onLine) {
+      const token = localStorage.getItem('firebase_id_token');
+      if (token) {
+        syncPendingActions();
+      }
+    }
+  }, [pendingActions.length, isLoggedIn]);
+
+  // Set up intervals and event listeners
+  useEffect(() => {
+    const handleOnline = () => {
+      console.log('Browser back online, triggering sync...');
+      syncPendingActions();
+    };
+
+    window.addEventListener('online', handleOnline);
+
+    const interval = setInterval(() => {
+      if (pendingActions.length > 0 && navigator.onLine) {
+        syncPendingActions();
+      }
+    }, 10000);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      clearInterval(interval);
+    };
+  }, [pendingActions, isSyncing]);
+
   // Task Operations
   const addTask = async (task: Omit<Task, 'id'> & { groupId?: string }) => {
     const newId = `task_${Date.now()}`;
@@ -635,22 +892,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
     setTasks(prev => [newTask, ...prev]);
 
-    const token = localStorage.getItem('firebase_id_token');
-    try {
-      const res = await fetch('/api/project/tasks', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : ''
-        },
-        body: JSON.stringify(newTask)
-      });
-      if (!res.ok) throw new Error('Failed to insert.');
-      setDbError(null);
-    } catch (err: any) {
-      console.warn('Sync failed, saved to local cache:', err.message);
-      setDbError('Database connection issue. Running in offline Local Storage mode.');
-    }
+    performMutation('ADD_TASK', '/api/project/tasks', 'POST', newTask);
 
     const assigneesText = task.assignees.length > 0
       ? members.filter(m => task.assignees.includes(m.id)).map(m => m.name).join(', ')
@@ -669,41 +911,12 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const taskObj = tasks.find(t => t.id === taskId);
     if (!taskObj) return;
 
-    const token = localStorage.getItem('firebase_id_token');
-    try {
-      const res = await fetch('/api/project/tasks', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : ''
-        },
-        body: JSON.stringify({ ...taskObj, status })
-      });
-      if (!res.ok) throw new Error('Failed to update.');
-      setDbError(null);
-    } catch (err: any) {
-      console.warn('Sync failed:', err.message);
-      setDbError('Database connection issue. Running in offline Local Storage mode.');
-    }
+    performMutation('UPDATE_TASK', '/api/project/tasks', 'POST', { ...taskObj, status });
   };
 
   const deleteTask = async (taskId: string) => {
     setTasks(prev => prev.filter(t => t.id !== taskId));
-
-    const token = localStorage.getItem('firebase_id_token');
-    try {
-      const res = await fetch(`/api/project/tasks/${taskId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': token ? `Bearer ${token}` : ''
-        }
-      });
-      if (!res.ok) throw new Error('Failed to delete.');
-      setDbError(null);
-    } catch (err: any) {
-      console.warn('Sync failed:', err.message);
-      setDbError('Database connection issue. Running in offline Local Storage mode.');
-    }
+    performMutation('DELETE_TASK', `/api/project/tasks/${taskId}`, 'DELETE', { id: taskId });
   };
 
   // Commit / Contribution Operations
@@ -725,32 +938,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     setCommits(prev => [newCommit, ...prev]);
 
-    setMembers(prev => prev.map(m => {
-      if (m.id === finalMemberId) {
-        return {
-          ...m,
-          commitsCount: m.commitsCount + 1,
-        };
-      }
-      return m;
-    }));
-
-    const token = localStorage.getItem('firebase_id_token');
-    try {
-      const res = await fetch('/api/project/commits', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : ''
-        },
-        body: JSON.stringify(newCommit)
-      });
-      if (!res.ok) throw new Error('Failed to log.');
-      setDbError(null);
-    } catch (err: any) {
-      console.warn('Sync failed:', err.message);
-      setDbError('Database connection issue. Running in offline Local Storage mode.');
-    }
+    performMutation('ADD_COMMIT', '/api/project/commits', 'POST', newCommit);
 
     addNotification(
       'Contribution Logged',
@@ -784,43 +972,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const updatedFeedback = [newFeedback, ...feedback];
     setFeedback(updatedFeedback);
 
-    setMembers(prev => prev.map(m => {
-      if (m.id === toMemberId) {
-        const memberFeedbacks = updatedFeedback.filter(f => f.toMemberId === toMemberId);
-        if (memberFeedbacks.length === 0) return m;
-
-        const totalScore = memberFeedbacks.reduce((sum, f) => {
-          const avg = (f.ratingQuality + f.ratingReliability + f.ratingCommunication + f.ratingContribution) / 4;
-          return sum + avg;
-        }, 0);
-
-        const calculatedAvg = totalScore / memberFeedbacks.length;
-        const scaledScore = parseFloat((calculatedAvg * 2).toFixed(1));
-
-        return {
-          ...m,
-          contributionScore: Math.min(scaledScore, 10.0),
-        };
-      }
-      return m;
-    }));
-
-    const token = localStorage.getItem('firebase_id_token');
-    try {
-      const res = await fetch('/api/project/feedback', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : ''
-        },
-        body: JSON.stringify(newFeedback)
-      });
-      if (!res.ok) throw new Error('Failed to save feedback.');
-      setDbError(null);
-    } catch (err: any) {
-      console.warn('Sync failed:', err.message);
-      setDbError('Database connection issue. Running in offline Local Storage mode.');
-    }
+    performMutation('SUBMIT_FEEDBACK', '/api/project/feedback', 'POST', newFeedback);
 
     addNotification(
       'Anonymous Feedback Submitted',
@@ -829,6 +981,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     );
   };
 
+  // Vote slot in meeting poll
   // Vote slot in meeting poll
   const votePollSlot = async (pollId: string, slotId: string) => {
     let finalScheduledSlot: any = null;
@@ -901,22 +1054,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return nextPolls;
     });
 
-    const token = localStorage.getItem('firebase_id_token');
-    try {
-      const res = await fetch(`/api/project/polls/${pollId}/vote`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : ''
-        },
-        body: JSON.stringify({ proposedSlots: nextProposedSlots })
-      });
-      if (!res.ok) throw new Error('Failed to vote.');
-      setDbError(null);
-    } catch (err: any) {
-      console.warn('Sync failed:', err.message);
-      setDbError('Database connection issue. Running in offline Local Storage mode.');
-    }
+    performMutation('VOTE_POLL', `/api/project/polls/${pollId}/vote`, 'PUT', { proposedSlots: nextProposedSlots });
 
     if (finalScheduledSlot) {
       setTimeout(async () => {
@@ -929,14 +1067,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
         setPolls(currentPolls => currentPolls.filter(cp => cp.id !== pollId));
 
-        try {
-          await fetch(`/api/project/polls/${pollId}`, {
-            method: 'DELETE',
-            headers: { 'Authorization': token ? `Bearer ${token}` : '' }
-          });
-        } catch (err) {
-          console.error(err);
-        }
+        performMutation('DELETE_TASK', `/api/project/polls/${pollId}`, 'DELETE', { id: pollId });
 
         addNotification(
           'Meeting Finalized & Scheduled',
@@ -965,22 +1096,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     setPolls(prev => [newPoll, ...prev]);
 
-    const token = localStorage.getItem('firebase_id_token');
-    try {
-      const res = await fetch('/api/project/polls', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : ''
-        },
-        body: JSON.stringify(newPoll)
-      });
-      if (!res.ok) throw new Error('Failed to create poll.');
-      setDbError(null);
-    } catch (err: any) {
-      console.warn('Sync failed:', err.message);
-      setDbError('Database connection issue. Running in offline Local Storage mode.');
-    }
+    performMutation('CREATE_POLL', '/api/project/polls', 'POST', newPoll);
 
     addNotification(
       'New Meeting Poll Created',
@@ -1002,22 +1118,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
     setEvents(prev => [...prev, newEvent].sort((a, b) => a.time.localeCompare(b.time)));
 
-    const token = localStorage.getItem('firebase_id_token');
-    try {
-      const res = await fetch('/api/project/events', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : ''
-        },
-        body: JSON.stringify(newEvent)
-      });
-      if (!res.ok) throw new Error('Failed to create event.');
-      setDbError(null);
-    } catch (err: any) {
-      console.warn('Sync failed:', err.message);
-      setDbError('Database connection issue. Running in offline Local Storage mode.');
-    }
+    performMutation('ADD_EVENT', '/api/project/events', 'POST', newEvent);
 
     addNotification(
       'New Event Calendar Registered',
@@ -1038,28 +1139,13 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     if (!updated) return;
 
-    const token = localStorage.getItem('firebase_id_token');
-    try {
-      const res = await fetch('/api/project/events', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : ''
-        },
-        body: JSON.stringify(updated)
-      });
-      if (!res.ok) throw new Error('Failed to update event.');
-      setDbError(null);
-    } catch (err: any) {
-      console.warn('Sync failed:', err.message);
-      setDbError('Database connection issue. Running in offline Local Storage mode.');
-    }
+    performMutation('TOGGLE_EVENT', '/api/project/events', 'POST', updated);
   };
 
   // Group operations
-  const createGroup = async (name: string, description: string, password?: string) => {
-    const cleanSlug = name.replace(/[^a-zA-Z0-9]/g, '-').toUpperCase().substring(0, 8);
-    const gId = `${cleanSlug}-${Math.floor(100 + Math.random() * 900)}`;
+  const createGroup = async (id: string, name: string, description: string, password?: string) => {
+    const gId = id.trim().replace(/[^a-zA-Z0-9_-]/g, '-').toUpperCase();
+    if (!gId) throw new Error('Invalid Group ID.');
     
     const newGroup: Group = {
       id: gId,
@@ -1071,9 +1157,6 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       pendingRequests: []
     };
 
-    setGroups(prev => [...prev, newGroup]);
-    setActiveGroupId(gId);
-
     const token = localStorage.getItem('firebase_id_token');
     try {
       const res = await fetch('/api/project/groups', {
@@ -1084,63 +1167,66 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
         },
         body: JSON.stringify({ id: gId, name, description, password })
       });
-      if (!res.ok) throw new Error('Failed to create group.');
+      if (!res.ok) {
+        const errorText = await res.text();
+        let errMsg = 'Failed to create group.';
+        let suggestions: string[] = [];
+        try {
+          const errJson = JSON.parse(errorText);
+          errMsg = errJson.error || errMsg;
+          suggestions = errJson.suggestions || [];
+        } catch(e) {}
+        
+        const errorObj: any = new Error(errMsg);
+        errorObj.suggestions = suggestions;
+        throw errorObj;
+      }
+      const data = await res.json();
+      const enrichedGroup = data.group;
+      
+      setGroups(prev => [...prev.filter(g => g.id !== gId), enrichedGroup]);
+      setActiveGroupId(gId);
       setDbError(null);
+
+      addNotification(
+        'Group Created Successfully',
+        `Your new group "${name}" has been created with ID "${gId}".`,
+        'success'
+      );
+
+      return enrichedGroup;
     } catch (err: any) {
+      if (err.suggestions) {
+        // Re-throw database validation error
+        throw err;
+      }
+
       console.warn('Sync failed:', err.message);
+      
+      // Offline fallback: update local state
+      setGroups(prev => [...prev.filter(g => g.id !== gId), newGroup]);
+      setActiveGroupId(gId);
       setDbError('Database connection issue. Running in offline Local Storage mode.');
+      
+      addNotification(
+        'Group Created (Offline Cache)',
+        `Your new group "${name}" has been created locally with ID "${gId}".`,
+        'info'
+      );
+
+      return newGroup;
     }
-
-    addNotification(
-      'Group Created Successfully',
-      `Your new group "${name}" has been created with ID "${gId}".`,
-      'success'
-    );
-
-    return newGroup;
   };
 
   const joinGroupRequest = async (groupId: string, password?: string) => {
-    const cleanId = groupId.trim();
-    const group = groups.find(g => g.id.toLowerCase() === cleanId.toLowerCase());
-    
-    if (!group) {
-      return { success: false, message: `Group with ID "${groupId}" does not exist.` };
+    const cleanId = groupId.trim().toUpperCase();
+    if (!cleanId) {
+      return { success: false, message: 'Please enter a valid Group ID.' };
     }
-
-    if (group.memberIds.includes(currentUser.id)) {
-      return { success: false, message: 'You are already a member of this group.' };
-    }
-
-    const alreadyRequested = group.pendingRequests.some(r => r.userId === currentUser.id);
-    if (alreadyRequested) {
-      return { success: false, message: 'You have already submitted a join request for this group. Waiting for owner approval.', requested: true };
-    }
-
-    if (group.password && group.password !== password) {
-      return { success: false, message: 'Incorrect group password. Please try again.' };
-    }
-
-    setGroups(prev => prev.map(g => {
-      if (g.id.toLowerCase() === cleanId.toLowerCase()) {
-         return {
-           ...g,
-           pendingRequests: [
-             ...g.pendingRequests,
-             {
-               userId: currentUser.id,
-               userName: currentUser.name,
-               userEmail: currentUser.email
-             }
-           ]
-         };
-      }
-      return g;
-    }));
 
     const token = localStorage.getItem('firebase_id_token');
     try {
-      const res = await fetch(`/api/project/groups/${group.id}/join`, {
+      const res = await fetch(`/api/project/groups/${cleanId}/join`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1148,20 +1234,96 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
         },
         body: JSON.stringify({ password })
       });
-      if (!res.ok) throw new Error(await res.text() || 'Failed to submit join request.');
-      setDbError(null);
+
+      const responseText = await res.text();
+      let responseData: any = {};
+      try {
+        responseData = JSON.parse(responseText);
+      } catch (e) {}
+
+      if (!res.ok) {
+        const errorMsg = responseData.error || 'Failed to submit join request.';
+        return { success: false, message: errorMsg };
+      }
+
+      if (responseData.passwordRequired) {
+        return { success: true, passwordRequired: true, message: 'Password is required to join this group.' };
+      }
+
+      if (responseData.joinedDirectly === false) {
+        addNotification(
+          'Join Request Submitted',
+          responseData.message || `Your request to join group "${cleanId}" has been submitted and is pending owner approval.`,
+          'info'
+        );
+        return { success: true, message: responseData.message || 'Join request submitted for approval.', requested: true };
+      }
+
+      addNotification(
+        'Joined Group Successfully',
+        `You have successfully joined group "${cleanId}".`,
+        'success'
+      );
+
+      // Re-fetch groups list
+      fetchGroups(token || undefined);
+      
+      // Navigate to the newly joined group
+      setActiveGroupId(cleanId);
+
+      return { success: true, message: responseData.message || 'Joined group successfully!', requested: false };
     } catch (err: any) {
       console.warn('Sync failed:', err.message);
-      setDbError('Database connection issue. Running in offline Local Storage mode.');
+      
+      // Offline fallback using cached groups
+      const localGroup = groups.find(g => g.id.toLowerCase() === cleanId.toLowerCase());
+      if (!localGroup) {
+        return { success: false, message: 'Offline Mode: Group was not found in local cache.' };
+      }
+      if (localGroup.memberIds.includes(currentUser.id)) {
+        return { success: false, message: 'You are already a member of this group.' };
+      }
+      if (localGroup.password && localGroup.password !== password) {
+        return { success: false, message: 'Incorrect group password. Please try again.' };
+      }
+
+      if (localGroup.password) {
+        setGroups(prev => prev.map(g => {
+          if (g.id.toLowerCase() === cleanId.toLowerCase()) {
+             const already = g.pendingRequests?.some(r => r.userId === currentUser.id);
+             if (already) return g;
+             return {
+               ...g,
+               pendingRequests: [
+                 ...(g.pendingRequests || []),
+                 {
+                   userId: currentUser.id,
+                   userName: currentUser.name,
+                   userEmail: currentUser.email
+                 }
+               ]
+             };
+          }
+          return g;
+        }));
+
+        setDbError('Database connection issue. Running in offline Local Storage mode.');
+        return { success: true, message: 'Offline Mode: Join request cached locally.', requested: true };
+      } else {
+        setGroups(prev => prev.map(g => {
+          if (g.id.toLowerCase() === cleanId.toLowerCase()) {
+            return {
+              ...g,
+              memberIds: Array.from(new Set([...g.memberIds, currentUser.id]))
+            };
+          }
+          return g;
+        }));
+        setActiveGroupId(cleanId);
+        setDbError('Database connection issue. Running in offline Local Storage mode.');
+        return { success: true, message: 'Offline Mode: Joined group successfully!', requested: false };
+      }
     }
-
-    addNotification(
-      'Join Request Submitted',
-      `Your request to join "${group.name}" is pending approval from the owner.`,
-      'info'
-    );
-
-    return { success: true, message: `Request to join "${group.name}" submitted successfully! Waiting for owner's approval.`, requested: true };
   };
 
   const approveJoinRequest = async (groupId: string, userId: string) => {
@@ -1170,6 +1332,23 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     const request = group.pendingRequests.find(r => r.userId === userId);
     if (!request) return;
+
+    // Add placeholder profile immediately so they appear in members selector
+    const newMemberProfile = {
+      id: userId,
+      name: request.userName,
+      email: request.userEmail,
+      role: 'Project Member',
+      avatar: request.userName.split(' ').map((n: string) => n[0]).join('').toUpperCase().substring(0, 2) || 'US',
+      color: 'bg-indigo-500',
+      commitsCount: 0,
+      contributionScore: 10.0
+    };
+
+    setMembers(prev => {
+      if (prev.some(m => m.id === userId)) return prev;
+      return [...prev, newMemberProfile];
+    });
 
     setGroups(prev => prev.map(g => {
       if (g.id === groupId) {
@@ -1240,6 +1419,66 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     );
   };
 
+  const updateGroupSettings = async (
+    groupId: string,
+    updates: { name?: string; description?: string; evaluationDate?: string; newGroupId?: string; password?: string }
+  ) => {
+    // If it's a new group ID, it must be online to verify and cascade.
+    if (updates.newGroupId) {
+      const token = localStorage.getItem('firebase_id_token');
+      try {
+        const res = await fetch(`/api/project/groups/${groupId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : ''
+          },
+          body: JSON.stringify(updates)
+        });
+        
+        const responseData = await res.json();
+        if (!res.ok) {
+          throw new Error(responseData.error || 'Failed to update group settings.');
+        }
+
+        const updatedGroup = responseData.group;
+        
+        setGroups(prev => prev.map(g => g.id === groupId ? updatedGroup : g));
+        setActiveGroupId(responseData.newGroupId);
+        localStorage.setItem('0mess_active_group_id', responseData.newGroupId);
+        setDbError(null);
+        return { success: true, message: 'Settings updated successfully.', newGroupId: responseData.newGroupId };
+      } catch (err: any) {
+        return { success: false, message: err.message || 'Database connection issue.' };
+      }
+    }
+
+    // Otherwise, optimistically update locally and queue
+    setGroups(prev => prev.map(g => {
+      if (g.id === groupId) {
+        return {
+          ...g,
+          name: updates.name !== undefined ? updates.name : g.name,
+          description: updates.description !== undefined ? updates.description : g.description,
+          evaluationDate: updates.evaluationDate !== undefined ? updates.evaluationDate : g.evaluationDate,
+          password: updates.password !== undefined ? updates.password : g.password
+        };
+      }
+      return g;
+    }));
+
+    const result = await performMutation('UPDATE_GROUP_SETTINGS', `/api/project/groups/${groupId}`, 'PUT', updates);
+    if (result.queued) {
+      return { success: true, message: 'Offline Mode: Settings updated locally and queued for sync.' };
+    }
+    return { success: result.success, message: result.success ? 'Settings updated successfully.' : 'Failed to update settings.' };
+  };
+
+  const updateGroupEvaluationDate = async (groupId: string, evaluationDate: string) => {
+    const res = await updateGroupSettings(groupId, { evaluationDate });
+    return res.success;
+  };
+
   // Helper Notifications
   const addNotification = (title: string, message: string, type: Notification['type']) => {
     const newNotification: Notification = {
@@ -1277,35 +1516,18 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const updateProfile = async (profileData: Partial<Member>) => {
-    const token = localStorage.getItem('firebase_id_token');
-    try {
-      const updatedUser = {
-        ...currentUser,
-        ...profileData
-      };
-      
-      setCurrentUser(updatedUser);
-      localStorage.setItem('0mess_current_user', JSON.stringify(updatedUser));
-      
-      setMembers(prev => prev.map(m => m.id === currentUser.id ? { ...m, ...profileData } : m));
+    const updatedUser = {
+      ...currentUser,
+      ...profileData
+    };
+    
+    setCurrentUser(updatedUser);
+    localStorage.setItem('0mess_current_user', JSON.stringify(updatedUser));
+    
+    setMembers(prev => prev.map(m => m.id === currentUser.id ? { ...m, ...profileData } : m));
 
-      const res = await fetch('/api/project/profile', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : ''
-        },
-        body: JSON.stringify(updatedUser)
-      });
-      if (!res.ok) throw new Error('Failed to update profile on database.');
-      
-      setDbError(null);
-      return true;
-    } catch (err: any) {
-      console.warn('Profile sync failed, saved locally:', err.message);
-      setDbError('Database connection issue. Running in offline Local Storage mode.');
-      return false;
-    }
+    const result = await performMutation('UPDATE_PROFILE', '/api/project/profile', 'POST', updatedUser);
+    return result.success || !!result.queued;
   };
 
   // Filter datasets
@@ -1321,16 +1543,70 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const activeMemberIds = activeGroupObj ? activeGroupObj.memberIds : [];
   const filteredMembers = members.filter(m => activeMemberIds.includes(m.id) || m.id === currentUser.id);
 
+  // Dynamically calculate classmate workload tasks completion, commit logs metrics, and peer evaluations
+  const computedMembers = filteredMembers.map(m => {
+    // 1. Calculate commitsCount
+    const memberCommits = filteredCommits.filter(c => c.memberId === m.id);
+    const commitsCount = memberCommits.length;
+
+    // 2. Calculate tasks progress score (S_tasks)
+    const memberTasks = filteredTasks.filter(t => t.assignees.includes(m.id));
+    const totalTasks = memberTasks.length;
+    const completedTasks = memberTasks.filter(t => t.status === 'COMPLETED').length;
+    const sTasks = totalTasks > 0 ? (completedTasks / totalTasks) * 10.0 : 10.0;
+
+    // 3. Calculate commits score (S_commits)
+    // 5 commits = max score of 10.0
+    const sCommits = Math.min(commitsCount * 2.0, 10.0);
+
+    // 4. Calculate peer feedback score (S_feedback)
+    const memberFeedbacks = filteredFeedback.filter(f => f.toMemberId === m.id);
+    let sFeedback = 10.0; // Default baseline if no feedback exists
+    if (memberFeedbacks.length > 0) {
+      const totalScore = memberFeedbacks.reduce((sum, f) => {
+        const avg = (f.ratingQuality + f.ratingReliability + f.ratingCommunication + f.ratingContribution) / 4.0;
+        return sum + avg;
+      }, 0);
+      const calculatedAvg = totalScore / memberFeedbacks.length;
+      sFeedback = calculatedAvg * 2.0; // Scale 1-5 to 0-10
+    }
+
+    // 5. Calculate unified contributionScore
+    // Weighted blend: 40% tasks progress, 40% commits/logs, 20% peer feedback
+    let contributionScore = 10.0;
+    if (totalTasks > 0) {
+      contributionScore = (sTasks * 0.4) + (sCommits * 0.4) + (sFeedback * 0.2);
+    } else {
+      // If no tasks assigned, 70% commits/logs, 30% peer feedback
+      contributionScore = (sCommits * 0.7) + (sFeedback * 0.3);
+    }
+
+    // Round to 1 decimal place
+    contributionScore = parseFloat(contributionScore.toFixed(1));
+
+    return {
+      ...m,
+      commitsCount,
+      contributionScore
+    };
+  });
+
+  const resolvedCurrentUser = computedMembers.find(m => m.id === currentUser.id) || {
+    ...currentUser,
+    commitsCount: filteredCommits.filter(c => c.memberId === currentUser.id).length,
+    contributionScore: 10.0
+  };
+
   return (
     <ProjectContext.Provider value={{
-      members: filteredMembers,
+      members: computedMembers,
       tasks: filteredTasks,
       commits: filteredCommits,
       feedback: filteredFeedback,
       polls: filteredPolls,
       events: filteredEvents,
       notifications,
-      currentUser,
+      currentUser: resolvedCurrentUser,
       isLoggedIn,
       login,
       logout,
@@ -1356,7 +1632,10 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setActiveGroupId,
       resetAllCaches,
       updateProfile,
-      dbError
+      updateGroupEvaluationDate,
+      updateGroupSettings,
+      dbError,
+      pendingActionsCount: pendingActions.length
     }}>
       {children}
     </ProjectContext.Provider>

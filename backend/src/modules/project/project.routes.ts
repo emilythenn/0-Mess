@@ -33,6 +33,7 @@ async function enrichGroupDetails(groupData: any) {
     description: groupData.description || '',
     password: groupData.password || '',
     ownerId: groupData.owner_id,
+    evaluationDate: groupData.evaluation_date || null,
     memberIds,
     pendingRequests
   };
@@ -140,7 +141,35 @@ router.get('/groups', verifySupabaseToken, async (req: AuthenticatedRequest, res
 router.post('/groups', verifySupabaseToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { uid } = req.user!;
-    const { id, name, description, password } = req.body;
+    const { id, name, description, password, evaluationDate } = req.body;
+
+    // Verify unique Group ID
+    const { data: existingGroup } = await supabase
+      .from('groups')
+      .select('id')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (existingGroup) {
+      const suggestions: string[] = [];
+      let suffix = 1;
+      while (suggestions.length < 3 && suffix < 100) {
+        const candidate = `${id}-${suffix}`;
+        const { data: checkExist } = await supabase
+          .from('groups')
+          .select('id')
+          .eq('id', candidate)
+          .maybeSingle();
+        if (!checkExist) {
+          suggestions.push(candidate);
+        }
+        suffix++;
+      }
+      return res.status(409).json({
+        error: 'Group ID is already taken.',
+        suggestions
+      });
+    }
 
     // Create the group
     const { data: group, error: groupErr } = await supabase
@@ -150,7 +179,8 @@ router.post('/groups', verifySupabaseToken, async (req: AuthenticatedRequest, re
         name,
         description: description || '',
         password: password || '',
-        owner_id: uid
+        owner_id: uid,
+        evaluation_date: evaluationDate || null
       })
       .select()
       .single();
@@ -178,7 +208,7 @@ router.post('/groups', verifySupabaseToken, async (req: AuthenticatedRequest, re
 // 4. POST /api/project/groups/:id/join - Request to join a group with password verification
 router.post('/groups/:id/join', verifySupabaseToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { uid, name, email } = req.user!;
+    const { uid } = req.user!;
     const { id } = req.params;
     const { password } = req.body;
 
@@ -186,28 +216,95 @@ router.post('/groups/:id/join', verifySupabaseToken, async (req: AuthenticatedRe
       .from('groups')
       .select('*')
       .eq('id', id)
-      .single();
+      .maybeSingle();
 
     if (fetchErr || !group) {
       return res.status(404).json({ error: 'Group workspace not found.' });
     }
 
-    if (group.password && group.password !== password) {
-      return res.status(400).json({ error: 'Incorrect workspace credentials password.' });
+    // Check if user is the owner
+    if (group.owner_id === uid) {
+      return res.status(400).json({ error: 'You are the owner of this group.' });
     }
 
-    // Submit join request
-    const { error: insertErr } = await supabase
-      .from('group_join_requests')
+    // Check if user is already a member
+    const { data: isMember } = await supabase
+      .from('group_members')
+      .select('*')
+      .eq('group_id', id)
+      .eq('user_id', uid)
+      .maybeSingle();
+
+    if (isMember) {
+      return res.status(400).json({ error: 'You are already a member of this group.' });
+    }
+
+    // Password-protected group flow
+    if (group.password && group.password.trim() !== '') {
+      if (password === undefined || password === null || password.trim() === '') {
+        return res.json({ passwordRequired: true });
+      }
+
+      if (group.password !== password) {
+        return res.status(401).json({ error: 'Incorrect group password.' });
+      }
+
+      // Check if join request already exists
+      const { data: existingRequest } = await supabase
+        .from('group_join_requests')
+        .select('*')
+        .eq('group_id', id)
+        .eq('user_id', uid)
+        .maybeSingle();
+
+      if (existingRequest) {
+        return res.status(400).json({ error: 'You have already submitted a join request. Please wait for the group owner to approve it.' });
+      }
+
+      // Fetch user profile info
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('name, email')
+        .eq('id', uid)
+        .maybeSingle();
+
+      // Insert join request
+      const { error: requestErr } = await supabase
+        .from('group_join_requests')
+        .insert({
+          group_id: id,
+          user_id: uid,
+          user_name: profile?.name || 'Student',
+          user_email: profile?.email || ''
+        });
+
+      if (requestErr) throw requestErr;
+
+      return res.json({ 
+        success: true, 
+        message: 'Join request submitted. Please wait for the group owner to approve it.', 
+        joinedDirectly: false 
+      });
+    }
+
+    // Enroll user directly as a member (direct join for passwordless groups)
+    const { error: memberErr } = await supabase
+      .from('group_members')
       .insert({
         group_id: id,
-        user_id: uid,
-        user_name: name || email?.split('@')[0] || 'Member',
-        user_email: email || ''
+        user_id: uid
       });
 
-    if (insertErr) throw insertErr;
-    res.json({ success: true, message: 'Join request pending group owner approval.' });
+    if (memberErr) throw memberErr;
+
+    // Delete any pending request if they exist
+    await supabase
+      .from('group_join_requests')
+      .delete()
+      .eq('group_id', id)
+      .eq('user_id', uid);
+
+    res.json({ success: true, message: 'Joined group successfully!', joinedDirectly: true });
   } catch (err: any) {
     console.error('Error joining group:', err);
     res.status(500).json({ error: err.message });
@@ -218,6 +315,22 @@ router.post('/groups/:id/join', verifySupabaseToken, async (req: AuthenticatedRe
 router.post('/groups/:id/requests/:userId/approve', verifySupabaseToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id, userId } = req.params;
+    const { uid } = req.user!;
+
+    // Check if the current user is the owner of the group
+    const { data: group, error: groupErr } = await supabase
+      .from('groups')
+      .select('owner_id')
+      .eq('id', id)
+      .single();
+
+    if (groupErr || !group) {
+      return res.status(404).json({ error: 'Group workspace not found.' });
+    }
+
+    if (group.owner_id !== uid) {
+      return res.status(403).json({ error: 'Access denied. Only the group owner can approve join requests.' });
+    }
 
     // Enrol into group
     const { error: memberErr } = await supabase
@@ -247,6 +360,22 @@ router.post('/groups/:id/requests/:userId/approve', verifySupabaseToken, async (
 router.post('/groups/:id/requests/:userId/decline', verifySupabaseToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id, userId } = req.params;
+    const { uid } = req.user!;
+
+    // Check if the current user is the owner of the group
+    const { data: group, error: groupErr } = await supabase
+      .from('groups')
+      .select('owner_id')
+      .eq('id', id)
+      .single();
+
+    if (groupErr || !group) {
+      return res.status(404).json({ error: 'Group workspace not found.' });
+    }
+
+    if (group.owner_id !== uid) {
+      return res.status(403).json({ error: 'Access denied. Only the group owner can decline join requests.' });
+    }
 
     await supabase
       .from('group_join_requests')
@@ -265,6 +394,7 @@ router.post('/groups/:id/requests/:userId/decline', verifySupabaseToken, async (
 router.get('/groups/:id/data', verifySupabaseToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
+    const { uid } = req.user!;
 
     // Fetch Group
     const { data: groupObj, error: groupErr } = await supabase
@@ -275,6 +405,18 @@ router.get('/groups/:id/data', verifySupabaseToken, async (req: AuthenticatedReq
 
     if (groupErr || !groupObj) {
       return res.status(404).json({ error: 'Group workspace not found.' });
+    }
+
+    // Check if user is either the owner or a member
+    const { data: isMember } = await supabase
+      .from('group_members')
+      .select('*')
+      .eq('group_id', id)
+      .eq('user_id', uid)
+      .maybeSingle();
+
+    if (groupObj.owner_id !== uid && !isMember) {
+      return res.status(403).json({ error: 'Access denied. You are not a member of this group.' });
     }
 
     const group = await enrichGroupDetails(groupObj);
@@ -593,6 +735,31 @@ router.post('/events', verifySupabaseToken, async (req: AuthenticatedRequest, re
     res.json({ message: 'Calendar event/milestone synchronized.', event: data });
   } catch (err: any) {
     console.error('Error syncing event:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 16. PUT /api/project/groups/:id - Update group details (e.g. evaluation date)
+router.put('/groups/:id', verifySupabaseToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { evaluationDate, name, description } = req.body;
+
+    const { data, error } = await supabase
+      .from('groups')
+      .update({
+        evaluation_date: evaluationDate,
+        name,
+        description
+      })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ message: 'Group details updated.', group: await enrichGroupDetails(data) });
+  } catch (err: any) {
+    console.error('Error updating group details:', err);
     res.status(500).json({ error: err.message });
   }
 });

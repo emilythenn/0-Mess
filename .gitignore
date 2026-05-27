@@ -36,3 +36,6 @@ Thumbs.db
 # IDE / System Logs
 .antigravity/
 .vscode/
+
+# Tests
+/backend/test_db.js

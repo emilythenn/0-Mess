@@ -113,5 +113,15 @@ export interface Group {
   ownerId: string;
   memberIds: string[];
   pendingRequests: GroupRequest[];
+  evaluationDate?: string | null;
+}
+
+export interface PendingAction {
+  id: string;
+  type: 'ADD_TASK' | 'UPDATE_TASK' | 'DELETE_TASK' | 'ADD_COMMIT' | 'SUBMIT_FEEDBACK' | 'CREATE_POLL' | 'VOTE_POLL' | 'ADD_EVENT' | 'TOGGLE_EVENT' | 'UPDATE_PROFILE' | 'UPDATE_GROUP_SETTINGS';
+  url: string;
+  method: 'POST' | 'PUT' | 'DELETE';
+  payload: any;
+  timestamp: number;
 }
 

@@ -4,7 +4,7 @@ import { Task, Member, Commit, MeetingPoll, Event } from '../types';
 import { 
   FileText, Cpu, CheckCircle, Clock, Calendar, Sparkles, 
   Plus, Upload, Shield, ChevronRight, Mail, Compass, HelpCircle,
-  ExternalLink, UserCheck, CheckSquare, MessageSquare, PlusCircle, Trash, Play, AlertCircle, Eye, EyeOff, Pencil
+  ExternalLink, UserCheck, CheckSquare, MessageSquare, PlusCircle, Trash, Play, AlertCircle, Eye, EyeOff, Pencil, Key, RefreshCw, WifiOff
 } from 'lucide-react';
 
 const renderFormattedMessage = (text: string, role: 'user' | 'model') => {
@@ -111,11 +111,18 @@ export const GroupWorkspaceView: React.FC = () => {
     submitFeedback,
     approveJoinRequest,
     declineJoinRequest,
-    dbError
+    updateGroupEvaluationDate,
+    updateGroupSettings,
+    dbError,
+    pendingActionsCount
   } = useProject();
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'tasks' | 'resources' | 'meetings' | 'team'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'tasks' | 'resources' | 'meetings' | 'team' | 'settings'>('overview');
   const [selectedMemberId, setSelectedMemberId] = useState<string>('');
+  
+  // Course evaluation date editing states
+  const [isEditingEvalDate, setIsEditingEvalDate] = useState<boolean>(false);
+  const [tempEvalDate, setTempEvalDate] = useState<string>('');
   
   // Collapsible AI panel toggle
   const [showAiPanel, setShowAiPanel] = useState<boolean>(true);
@@ -273,6 +280,14 @@ export const GroupWorkspaceView: React.FC = () => {
   }, [members, inputTeamSize]);
 
   const currentGroupObj = groups.find(g => g.id === activeGroupId) || groups[0];
+
+  useEffect(() => {
+    if (currentGroupObj && currentGroupObj.evaluationDate) {
+      setTempEvalDate(currentGroupObj.evaluationDate);
+    } else {
+      setTempEvalDate('');
+    }
+  }, [currentGroupObj?.evaluationDate]);
 
   // Drag-and-drop mechanics
   const handleDrag = (e: React.DragEvent) => {
@@ -964,8 +979,36 @@ export const GroupWorkspaceView: React.FC = () => {
       {/* Centered Workspace Panel Layout */}
       <div className="flex-1 flex flex-col h-full overflow-y-auto px-6 md:px-10 py-6">
         
+        {/* Offline/Sync Status Banner */}
+        {pendingActionsCount > 0 && (
+          <div className={`border rounded-xl p-3.5 flex items-center justify-between text-xs font-medium mb-4 animate-fade-in shrink-0 ${
+            navigator.onLine 
+              ? 'bg-indigo-50 border-indigo-200 text-indigo-900' 
+              : 'bg-amber-50 border-amber-200 text-amber-900'
+          }`}>
+            <div className="flex items-center space-x-2.5">
+              {navigator.onLine ? (
+                <RefreshCw className="w-5 h-5 text-indigo-600 animate-spin shrink-0" />
+              ) : (
+                <WifiOff className="w-5 h-5 text-amber-600 shrink-0" />
+              )}
+              <div>
+                <span className="font-bold">
+                  {navigator.onLine ? 'Synchronizing Updates: ' : 'Offline Mode: '}
+                </span>
+                <span>
+                  {navigator.onLine 
+                    ? `Merging ${pendingActionsCount} queued update${pendingActionsCount === 1 ? '' : 's'} with Supabase server...`
+                    : `${pendingActionsCount} update${pendingActionsCount === 1 ? '' : 's'} queued to sync. Changes will save automatically when online.`
+                  }
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Top-Level Database Error connection/warning banner */}
-        {dbError && (
+        {dbError && !dbError.includes('Offline Mode') && !dbError.includes('Synchronizing') && !dbError.includes('connection issue') && (
           <div className="bg-rose-50 border border-rose-200 rounded-xl p-3.5 flex items-center justify-between text-xs text-rose-900 font-medium mb-6 animate-fade-in shrink-0">
             <div className="flex items-center space-x-2.5">
               <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
@@ -1016,7 +1059,10 @@ export const GroupWorkspaceView: React.FC = () => {
 
         {/* Tab Row Selector */}
         <div className="flex space-x-5 border-b border-[#F3F4F6] text-xs font-semibold mb-8">
-          {(['overview', 'tasks', 'resources', 'meetings', 'team'] as const).map((tab) => (
+          {([
+            'overview', 'tasks', 'resources', 'meetings', 'team',
+            ...(currentGroupObj.ownerId === currentUser.id ? ['settings'] : [])
+          ] as ('overview' | 'tasks' | 'resources' | 'meetings' | 'team' | 'settings')[]).map((tab) => (
 
             <button
               key={tab}
@@ -1060,7 +1106,85 @@ export const GroupWorkspaceView: React.FC = () => {
 
                 <div className="flex items-center justify-between text-[11px] text-[#666666] mt-2.5">
                   <span>{milestoneEvents.filter(e => e.completed).length} of {milestoneEvents.length} milestones reached</span>
-                  <span className="font-mono">Course evaluation: May 31, 2026 (6 days remaining)</span>
+                  <div className="flex items-center space-x-1.5 font-mono">
+                    {isEditingEvalDate ? (
+                      <div className="flex items-center space-x-1 bg-slate-50 p-1 border border-slate-200 rounded-lg">
+                        <input
+                          type="date"
+                          value={tempEvalDate}
+                          onChange={(e) => setTempEvalDate(e.target.value)}
+                          className="bg-white border border-[#E5E7EB] rounded px-1.5 py-0.5 text-[10px] text-slate-800 focus:outline-hidden focus:border-[#4F46E5]"
+                        />
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (currentGroupObj) {
+                              await updateGroupEvaluationDate(currentGroupObj.id, tempEvalDate);
+                            }
+                            setIsEditingEvalDate(false);
+                          }}
+                          className="bg-[#4F46E5] text-white rounded px-2 py-0.5 text-[9px] font-semibold hover:bg-[#4338CA] cursor-pointer"
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTempEvalDate(currentGroupObj?.evaluationDate || '');
+                            setIsEditingEvalDate(false);
+                          }}
+                          className="bg-slate-200 text-slate-700 rounded px-2 py-0.5 text-[9px] font-semibold hover:bg-slate-350 hover:bg-slate-300 cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center space-x-1">
+                        <span>
+                          Course evaluation: {currentGroupObj?.evaluationDate ? (
+                            (() => {
+                              try {
+                                const date = new Date(currentGroupObj.evaluationDate);
+                                const formatted = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                                
+                                const today = new Date();
+                                today.setHours(0, 0, 0, 0);
+                                date.setHours(0, 0, 0, 0);
+                                const diffTime = date.getTime() - today.getTime();
+                                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                                
+                                let remainingText = "";
+                                if (diffDays > 0) {
+                                  remainingText = ` (${diffDays} days remaining)`;
+                                } else if (diffDays === 0) {
+                                  remainingText = " (Today)";
+                                } else {
+                                  remainingText = ` (${Math.abs(diffDays)} days ago)`;
+                                }
+                                
+                                return `${formatted}${remainingText}`;
+                              } catch (e) {
+                                return currentGroupObj.evaluationDate;
+                              }
+                            })()
+                          ) : (
+                            <span className="text-slate-400">Not set</span>
+                          )}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTempEvalDate(currentGroupObj?.evaluationDate || '');
+                            setIsEditingEvalDate(true);
+                          }}
+                          className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
+                          title="Set course evaluation date"
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -2982,6 +3106,13 @@ export const GroupWorkspaceView: React.FC = () => {
             </div>
           )}
 
+          {/* SETTINGS TAB */}
+          {activeTab === 'settings' && currentGroupObj.ownerId === currentUser.id && (
+            <WorkspaceSettingsPanel
+              currentGroupObj={currentGroupObj}
+              updateGroupSettings={updateGroupSettings}
+            />
+          )}
 
         </div>
 
@@ -3213,6 +3344,151 @@ export const GroupWorkspaceView: React.FC = () => {
         </div>
       )}
 
+    </div>
+  );
+};
+
+interface WorkspaceSettingsPanelProps {
+  currentGroupObj: any;
+  updateGroupSettings: any;
+}
+
+const WorkspaceSettingsPanel: React.FC<WorkspaceSettingsPanelProps> = ({ currentGroupObj, updateGroupSettings }) => {
+  const [name, setName] = useState(currentGroupObj.name);
+  const [description, setDescription] = useState(currentGroupObj.description);
+  const [groupId, setGroupId] = useState(currentGroupObj.id);
+  const [password, setPassword] = useState(currentGroupObj.password || '');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    setName(currentGroupObj.name);
+    setDescription(currentGroupObj.description);
+    setGroupId(currentGroupObj.id);
+    setPassword(currentGroupObj.password || '');
+  }, [currentGroupObj]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || !groupId.trim()) {
+      setError('Group Name and Group ID cannot be empty.');
+      return;
+    }
+    setError(null);
+    setSuccess(null);
+    setIsSubmitting(true);
+
+    try {
+      const res = await updateGroupSettings(currentGroupObj.id, {
+        name,
+        description,
+        newGroupId: groupId,
+        password
+      });
+
+      if (res.success) {
+        setSuccess(res.message || 'Settings updated successfully.');
+        setTimeout(() => setSuccess(null), 3000);
+      } else {
+        setError(res.message || 'Failed to update settings.');
+      }
+    } catch (err: any) {
+      setError(err.message || 'An unexpected error occurred.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6 text-left max-w-2xl animate-fade-in font-sans">
+      <div>
+        <h3 className="text-sm font-extrabold text-[#111111] tracking-tight">Workspace Settings</h3>
+        <p className="text-[#666666] text-xs">Manage your working group profile details, slug code, and joining credentials.</p>
+      </div>
+
+      {success && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs p-3.5 rounded-xl flex items-center space-x-2 animate-fade-in">
+          <CheckSquare className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span>{success}</span>
+        </div>
+      )}
+
+      {error && (
+        <div className="bg-rose-50 border border-rose-200 text-rose-800 text-xs p-3.5 rounded-xl flex items-center space-x-2 animate-fade-in">
+          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="space-y-5 bg-white border border-[#E5E7EB] rounded-2xl p-5 md:p-6 shadow-2xs">
+        <div>
+          <label className="block text-[10px] font-mono font-bold uppercase tracking-wider mb-1.5 text-slate-700">Group Name</label>
+          <input 
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            className="w-full bg-slate-50 border border-[#E5E7EB] focus:bg-white focus:border-[#4F46E5] focus:ring-1 focus:ring-[#4F46E5] p-2.5 rounded-xl text-xs outline-none transition-all"
+          />
+        </div>
+
+        <div>
+          <label className="block text-[10px] font-mono font-bold uppercase tracking-wider mb-1.5 text-slate-700">Brief Description</label>
+          <textarea 
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={3}
+            className="w-full bg-slate-50 border border-[#E5E7EB] focus:bg-white focus:border-[#4F46E5] focus:ring-1 focus:ring-[#4F46E5] p-2.5 rounded-xl text-xs outline-none transition-all resize-none"
+          />
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-[10px] font-mono font-bold uppercase tracking-wider mb-1.5 text-slate-700">Group ID (Unique Slug)</label>
+            <input 
+              type="text"
+              value={groupId}
+              onChange={(e) => setGroupId(e.target.value.toUpperCase())}
+              required
+              className="w-full bg-slate-50 border border-[#E5E7EB] focus:bg-white focus:border-[#4F46E5] focus:ring-1 focus:ring-[#4F46E5] p-2.5 rounded-xl text-xs outline-none transition-all font-mono"
+            />
+            <span className="text-[9px] text-slate-500 mt-1 block">Teammates use this to find and request to join this group.</span>
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-mono font-bold uppercase tracking-wider mb-1.5 text-slate-700">Group Password (Optional)</label>
+            <div className="relative">
+              <input 
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="No password (public)"
+                className="w-full bg-slate-50 border border-[#E5E7EB] focus:bg-white focus:border-[#4F46E5] focus:ring-1 focus:ring-[#4F46E5] p-2.5 rounded-xl text-xs outline-none transition-all pr-10 font-mono"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+            <span className="text-[9px] text-slate-500 mt-1 block">Reveal or change the password. Keep it empty to make the group public.</span>
+          </div>
+        </div>
+
+        <div className="pt-2">
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="w-full sm:w-auto bg-[#4F46E5] hover:bg-[#4338CA] text-white text-xs font-bold px-6 py-2.5 rounded-xl transition-all cursor-pointer disabled:opacity-50 font-sans"
+          >
+            {isSubmitting ? "Saving changes..." : "Save Settings"}
+          </button>
+        </div>
+      </form>
     </div>
   );
 };

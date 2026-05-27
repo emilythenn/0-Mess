@@ -17,6 +17,31 @@ A centralized, real-time collaboration and accountability platform tailored for 
 
 ---
 
+## 📡 Offline-First & Conflict Resolution System (Upgrade 2)
+
+**0-Mess** is built with a resilient offline-first architecture to handle unstable network environments and server downtime, ensuring students can keep tracking and updating their group project uninterrupted.
+
+### 1. FIFO Mutation Queueing
+* When the client is offline (detected via `navigator.onLine` or HTTP timeouts), all write operations (adding/updating/deleting tasks, logging commits, submitting peer reviews, scheduling events, voting in polls, updating profile, etc.) route through a centralized queue.
+* Changes are instantly rendered in the React state (Optimistic UI updates) and serialized to `localStorage` under a FIFO queue (`0mess_pending_actions`).
+* A glassmorphic **Offline Indicator Bar** rises in both the Dashboard and Group workspace, showing the count of pending updates.
+
+### 2. Synchronization Engine
+* The application listens for `window.onLine` reconnection events and performs a background sync loop every **10 seconds**.
+* When connection is recovered, the queue is drained sequentially. Banners display a rotating `"Synchronizing updates..."` state until the cache is fully flushed and real-time listeners are re-established.
+
+### 3. Conflict Resolution Rules
+When offline modifications are synced back, the engine compares the local action with the current Supabase server state:
+* **Last-Write-Wins (LWW)**: For task status updates, the client compares the local queue timestamp against the server's Postgres update metadata. The client version wins only if it is newer than the server's record.
+* **Text Merging**: If a task's description was modified offline by user A while user B updated it on the server, both updates are saved by merging the descriptions:
+  ```
+  [Server Description Content]
+  [Merged Update]: [Client Offline Description Content]
+  ```
+* **Deletion Precedence**: If a task was deleted on the server while the client was offline making edits to it, the offline updates are discarded to prevent ghost items.
+
+---
+
 ## 🛠️ Technology Stack
 
 ### Frontend
