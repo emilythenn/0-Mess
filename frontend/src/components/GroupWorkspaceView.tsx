@@ -3180,18 +3180,18 @@ export const GroupWorkspaceView: React.FC = () => {
 
           {/* Suggested shortcuts */}
           <div className="p-3 border-t border-[#F3F4F6] bg-slate-50/50 space-y-1.5 text-left">
-            <span className="text-[9px] font-mono font-bold text-[#888888] uppercase block tracking-wider">Suggested Queries</span>
+            <span className="text-[9px] font-mono font-bold text-[#888888] uppercase block tracking-wider">Workspace Assistant Shortcuts</span>
             <div className="flex flex-wrap gap-1.5">
               {[
-                { label: "💡 Task division advice", prompt: "Suggest fair task distribution based on different roles in a university replication/database project." },
-                { label: "🤝 Teammate conflict", prompt: "How can we resolve a conflict where one team member is late submitting their milestone tasks?" },
-                { label: "📄 Syllabus analysis", prompt: "How to extract clear backlog tasks and objectives from our uploaded syllabus?" }
+                { label: "📊 Audit Task Distribution", prompt: "Analyze our team's workload distribution and suggest task redistribution to balance the workload." },
+                { label: "📅 Review Project Status", prompt: "Summarize our current project status, upcoming milestone deadlines, and recent progress." },
+                { label: "🔍 Check Workspace Resources", prompt: "What documents have been uploaded to our workspace and what do they cover?" }
               ].map((shortcut, idx) => (
                 <button
                   key={idx}
                   onClick={() => handleSendChat(undefined, shortcut.prompt)}
                   disabled={isSendingToAi}
-                  className="cursor-pointer text-[9.5px] font-sans font-medium text-slate-700 bg-white border border-[#E5E7EB] rounded-lg px-2.5 py-1.5 hover:bg-slate-50 hover:text-indigo-600 transition-all text-left truncate max-w-full disabled:opacity-50"
+                  className="cursor-pointer text-[9.5px] font-sans font-medium text-slate-700 bg-white border border-[#E5E7EB] rounded-lg px-2.5 py-1.5 hover:bg-slate-50 hover:text-[#4F46E5] hover:border-[#4F46E5]/40 hover:scale-[1.02] active:scale-[0.98] transition-all text-left truncate max-w-full disabled:opacity-50 shadow-xs"
                 >
                   {shortcut.label}
                 </button>
