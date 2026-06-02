@@ -22,6 +22,7 @@ interface ProjectContextType {
   addCommit: (title: string, description: string, type: Commit['type'], file?: { name: string; size: string; type: string }, authorOverride?: { id: string; name: string }) => void;
   submitFeedback: (toMemberId: string, ratingQuality: number, ratingReliability: number, ratingCommunication: number, ratingContribution: number, comment: string) => void;
   votePollSlot: (pollId: string, slotId: string) => void;
+  closePoll: (pollId: string) => void;
   createMeetingPoll: (title: string, description: string, slots: string[]) => void;
   addEvent: (title: string, time: string, type: Event['type'], description: string) => void;
   toggleEventCompleted: (id: string) => void;
@@ -953,7 +954,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   // Task Operations
   const addTask = async (task: Omit<Task, 'id'> & { groupId?: string }) => {
-    const newId = `task_${Date.now()}`;
+    const newId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const newTask: Task = {
       ...task,
       groupId: task.groupId || activeGroupId || 'CS402-G4',
@@ -1050,101 +1051,64 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     );
   };
 
-  // Vote slot in meeting poll
-  // Vote slot in meeting poll
+  // Vote (or un-vote) a single slot — current user only, no auto-simulation
   const votePollSlot = async (pollId: string, slotId: string) => {
-    let finalScheduledSlot: any = null;
-    let finalPollTitle = "";
     let nextProposedSlots: any[] = [];
 
     setPolls(prev => {
-      let isUserAddingVote = false;
-      
       const nextPolls = prev.map(p => {
         if (p.id !== pollId) return p;
 
-        const slotToVote = p.proposedSlots.find(s => s.id === slotId);
-        if (slotToVote && !slotToVote.votedMemberIds.includes(currentUser.id)) {
-          isUserAddingVote = true;
-        }
-
         const updatedSlots = p.proposedSlots.map(s => {
-          if (s.id === slotId) {
-            const alreadyVoted = s.votedMemberIds.includes(currentUser.id);
-            const updatedVotes = alreadyVoted
+          if (s.id !== slotId) return s;
+          const alreadyVoted = s.votedMemberIds.includes(currentUser.id);
+          return {
+            ...s,
+            votedMemberIds: alreadyVoted
               ? s.votedMemberIds.filter(id => id !== currentUser.id)
-              : [...s.votedMemberIds, currentUser.id];
-            return { ...s, votedMemberIds: updatedVotes };
-          }
-          return s;
+              : [...s.votedMemberIds, currentUser.id],
+          };
         });
 
         nextProposedSlots = updatedSlots;
         return { ...p, proposedSlots: updatedSlots };
       });
-
-      const pollIndex = nextPolls.findIndex(p => p.id === pollId);
-      if (pollIndex !== -1 && isUserAddingVote && filteredMembers.length > 1) {
-        const poll = nextPolls[pollIndex];
-        const allVotedIds = new Set(poll.proposedSlots.flatMap(s => s.votedMemberIds));
-        
-        const colleaguesToVote = filteredMembers.filter(m => m.id !== currentUser.id && !allVotedIds.has(m.id));
-
-        if (colleaguesToVote.length > 0) {
-          const updatedSlots = poll.proposedSlots.map(s => ({ ...s, votedMemberIds: [...s.votedMemberIds] }));
-          
-          colleaguesToVote.forEach(colleague => {
-            const randomSlotIdx = Math.floor(Math.random() * updatedSlots.length);
-            updatedSlots[randomSlotIdx].votedMemberIds.push(colleague.id);
-          });
-
-          poll.proposedSlots = updatedSlots;
-          nextProposedSlots = updatedSlots;
-        }
-
-        const finalVotedIds = new Set(poll.proposedSlots.flatMap(s => s.votedMemberIds));
-        const allMembersVoted = filteredMembers.every(m => finalVotedIds.has(m.id));
-
-        if (allMembersVoted) {
-          let maxVotes = -1;
-          let bestSlot = poll.proposedSlots[0];
-          poll.proposedSlots.forEach(s => {
-            if (s.votedMemberIds.length > maxVotes) {
-              maxVotes = s.votedMemberIds.length;
-              bestSlot = s;
-            }
-          });
-
-          finalScheduledSlot = bestSlot;
-          finalPollTitle = poll.title;
-        }
-      }
-
       return nextPolls;
     });
 
     performMutation('VOTE_POLL', `/api/project/polls/${pollId}/vote`, 'PUT', { proposedSlots: nextProposedSlots });
+  };
 
-    if (finalScheduledSlot) {
-      setTimeout(async () => {
-        addEvent(
-          `${finalPollTitle} - Finalized Sync`,
-          finalScheduledSlot.time,
-          'meeting',
-          `Automatically scheduled based on team availability consensus.`
-        );
+  // Close a poll: pick the slot with the highest votes, schedule it as a meeting event, remove the poll
+  const closePoll = (pollId: string) => {
+    const poll = polls.find(p => p.id === pollId);
+    if (!poll) return;
 
-        setPolls(currentPolls => currentPolls.filter(cp => cp.id !== pollId));
+    // Find the slot with the most votes (tie-break: first one wins)
+    let bestSlot = poll.proposedSlots[0];
+    poll.proposedSlots.forEach(s => {
+      if (s.votedMemberIds.length > bestSlot.votedMemberIds.length) {
+        bestSlot = s;
+      }
+    });
 
-        performMutation('DELETE_TASK', `/api/project/polls/${pollId}`, 'DELETE', { id: pollId });
+    // Schedule as a meeting event
+    addEvent(
+      `${poll.title} - Finalized`,
+      bestSlot.time,
+      'meeting',
+      `Scheduled based on team availability votes. Winning slot: "${bestSlot.time}" with ${bestSlot.votedMemberIds.length} vote(s).`
+    );
 
-        addNotification(
-          'Meeting Finalized & Scheduled',
-          `"${finalPollTitle}" has been scheduled for ${finalScheduledSlot.time}`,
-          'success'
-        );
-      }, 1000);
-    }
+    // Remove the resolved poll
+    setPolls(prev => prev.filter(p => p.id !== pollId));
+    performMutation('DELETE_TASK', `/api/project/polls/${pollId}`, 'DELETE', { id: pollId });
+
+    addNotification(
+      'Meeting Finalized & Scheduled',
+      `"${poll.title}" has been scheduled for ${bestSlot.time}`,
+      'success'
+    );
   };
 
   // Create Meeting slot Poll
@@ -1724,6 +1688,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       addCommit,
       submitFeedback,
       votePollSlot,
+      closePoll,
       createMeetingPoll,
       addEvent,
       toggleEventCompleted,

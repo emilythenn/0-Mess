@@ -9,7 +9,7 @@ export class FileService {
    */
   static async extractText(buffer: Buffer, originalName: string): Promise<string> {
     const ext = originalName.split('.').pop()?.toLowerCase();
-    
+
     if (ext === 'pdf') {
       const parser = new PDFParse({ data: buffer });
       const data = await parser.getText();
@@ -33,7 +33,7 @@ export class FileService {
 
     // Remove double spacings and normalise newlines for clean parsing
     const cleanedText = text.replace(/\r\n/g, '\n').replace(/ +/g, ' ');
-    
+
     let start = 0;
     while (start < cleanedText.length) {
       let end = start + chunkSize;
@@ -53,7 +53,7 @@ export class FileService {
       }
 
       chunks.push(cleanedText.slice(start, splitPoint).trim());
-      
+
       // Advance starting point minus overlap
       start = splitPoint - chunkOverlap;
       if (start < 0) start = 0;

@@ -45,15 +45,20 @@ When offline modifications are synced back, the engine compares the local action
 
 ---
 
-## 🤖 Retrieval-Augmented Generation (RAG) & AI Workspace Engine
+## 🤖 Retrieval-Augmented Generation (RAG) Chatbot & Entire-Document AI Workload Builder
 
-The **0-Mess** workspace integrates a semantic RAG pipeline to help students extract deliverables and requirements from syllabus sheets, rubrics, and project briefs.
+The **0-Mess** workspace separates AI intelligence into two distinct pipelines to maximize accuracy:
 
-* **Multi-Format Parsing**: Extracts raw text from uploaded PDF instructions (via modern `PDFParse`) and DOCX guides (via `Mammoth`).
-* **Semantic Splitting**: Segments parsed documents into overlapping text chunks to ensure context remains unbroken across boundaries.
-* **Supabase pgvector**: Leverages the PostgreSQL `pgvector` extension to store document chunk vectors.
-* **Cosine Similarity Querying**: Runs vector similarity searches on user queries to retrieve relevant context chunks before passing them to the Google Gemini API (`gemini-2.5-flash`).
-* **Exhaustive Workload Splitting**: Commands the AI model to identify all required assignment deliverables from the documents and evenly distribute tasks among active team members so no items are missed.
+### 1. Retrieval-Augmented Generation (RAG) Chatbot
+Used for answering user queries in the AI assistant sidebar:
+* **Supabase pgvector**: Stores overlapping text chunks and text embeddings (via `gemini-embedding-2`) of files uploaded in the resources tab.
+* **Cosine Similarity Querying**: Runs real-time vector similarity searches on user questions to retrieve the most relevant context chunks.
+* **Contextual Response Generation**: Enriches Gemini prompt context with matching document chunks and active database stats (tasks, activity logs) to generate precise, document-aligned answers.
+
+### 2. Entire-Document AI Workload Builder
+Used for generating Sprint Kanban board tasks:
+* **Zero-Loss Document Reconstruction**: Pulls and reassembles all text chunks for the target file in sequence to construct the entire document.
+* **Exhaustive Deliverables Extraction**: Feeds the full text to the Google Gemini API (`gemini-3.5-flash`), commanding it to summarize all deliverables and grading criteria, and distribute them evenly across active team members without omission.
 
 ---
 

@@ -238,7 +238,6 @@ export const GroupWorkspaceView: React.FC = () => {
   const [isGeneratingDistribution, setIsGeneratingDistribution] = useState<boolean>(false);
   const [activeDistribution, setActiveDistribution] = useState<null | any[]>(null);
   const [claimedRoleIds, setClaimedRoleIds] = useState<Record<string, string>>({});
-  const [isTeammatesClaiming, setIsTeammatesClaiming] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [generationProgress, setGenerationProgress] = useState<number>(0);
 
@@ -379,12 +378,17 @@ export const GroupWorkspaceView: React.FC = () => {
               ? `Edited ${new Date(file.updated_at).toLocaleDateString()} ${new Date(file.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
               : `Uploaded ${new Date(file.created_at).toLocaleDateString()} ${new Date(file.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
             
+            let category = file.mime_type || 'Documents';
+            if (!isLink && (category.includes('/') || category.toLowerCase() === 'text/plain' || category.toLowerCase() === 'application/pdf')) {
+              category = 'Documents';
+            }
+
             return {
               id: `db_${file.id}`,
               dbId: file.id,
               title: file.name,
               type: isLink ? (file.mime_type || 'Google Drive') : (file.name.split('.').pop()?.toUpperCase() || 'DOCUMENT'),
-              category: file.mime_type || 'Documents',
+              category,
               url: file.url || '#',
               description: file.description || '',
               date: dateStr,
@@ -639,68 +643,31 @@ export const GroupWorkspaceView: React.FC = () => {
     }) : null);
   };
 
-  // Teammates selection simulator
+  // Claim current user's own role — no auto-simulation of teammates
   const handleClaimRole = (roleId: string) => {
-    if (isTeammatesClaiming) return;
-
-    // Assign to current user
     const newClaims = {
       ...claimedRoleIds,
       [currentUser.id]: roleId
     };
     setClaimedRoleIds(newClaims);
-    setToastMessage("You claimed the role! Teammates are coordinating their selections live...");
-
-    // Check if everything is claimed immediately (e.g. if team size is 1)
-    if (Object.keys(newClaims).length === activeDistribution?.length) {
-      setTimeout(() => {
-        handleEnrolWorkloadTasksDirect(newClaims);
-      }, 800);
-      return;
-    }
-
-    setIsTeammatesClaiming(true);
-
-    const colleagues = members.filter(m => m.id !== currentUser.id);
-    const availableRoles = activeDistribution 
-      ? activeDistribution.filter(r => r.id !== roleId)
-      : [];
-    
-    const unclaimedRoleIds = availableRoles.map(r => r.id);
-    const claimingColleagues = colleagues.slice(0, unclaimedRoleIds.length);
-
-    let currentClaims = { ...newClaims };
-
-    claimingColleagues.forEach((colleague, index) => {
-      setTimeout(() => {
-        if (unclaimedRoleIds.length > 0) {
-          const selectedId = unclaimedRoleIds.shift();
-          if (selectedId) {
-            currentClaims = {
-              ...currentClaims,
-              [colleague.id]: selectedId
-            };
-            setClaimedRoleIds(currentClaims);
-
-            const roleNameMatched = activeDistribution?.find(r => r.id === selectedId)?.roleName;
-            setToastMessage(`${colleague.name} claimed '${roleNameMatched}'`);
-
-            if (Object.keys(currentClaims).length === activeDistribution?.length) {
-              setTimeout(() => {
-                handleEnrolWorkloadTasksDirect(currentClaims);
-              }, 800);
-            }
-          }
-        }
-
-        if (index === claimingColleagues.length - 1) {
-          setIsTeammatesClaiming(false);
-        }
-      }, (index + 1) * 700);
-    });
+    setToastMessage("You claimed the role! Now assign the remaining roles to your teammates, then click 'Split & Push Tasks'.");
   };
 
-  // Turn claimed roles and subtasks into live Kanban tasks automatically
+  // Assign a specific role to a specific teammate (admin assignment)
+  const handleAssignRole = (memberId: string, roleId: string) => {
+    // Un-assign any role this member already has, then assign the new one
+    const withoutMember = Object.fromEntries(
+      Object.entries(claimedRoleIds).filter(([mId]) => mId !== memberId)
+    );
+    setClaimedRoleIds({ ...withoutMember, [memberId]: roleId });
+  };
+
+  // Called only when the user explicitly clicks "Split & Push Tasks"
+  const handleConfirmAndSplitTasks = () => {
+    handleEnrolWorkloadTasksDirect(claimedRoleIds);
+  };
+
+  // Turn claimed roles and subtasks into live Kanban tasks
   const handleEnrolWorkloadTasksDirect = (claimedMap: Record<string, string>) => {
     if (!activeDistribution) return;
 
@@ -724,12 +691,13 @@ export const GroupWorkspaceView: React.FC = () => {
       });
     });
 
-    setToastMessage(`Success! Automatically synchronized workloads and pushed ${totalAdded} personalized tasks into the 'To Do' Sprint Kanban board column.`);
+    setToastMessage(`Success! Synchronized workloads and pushed ${totalAdded} tasks into the 'To Do' Sprint Kanban column.`);
     setActiveDistribution(null);
     setClaimedRoleIds({});
     setIsWorkloadConfirmed(false);
     setActiveWorkloadTab('board');
   };
+
 
   // Submit task progress update and click Done
   const handleLogProgressSubmit = (e: React.FormEvent) => {
@@ -1138,6 +1106,22 @@ export const GroupWorkspaceView: React.FC = () => {
           </div>
         </div>
 
+        {/* System Messages Banner */}
+        {toastMessage && (
+          <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3.5 flex items-center justify-between text-xs text-indigo-900 font-medium animate-fade-in mb-6">
+            <div className="flex items-center space-x-2">
+              <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
+              <span>{toastMessage}</span>
+            </div>
+            <button 
+              onClick={() => setToastMessage(null)} 
+              className="text-[10px] text-indigo-500 hover:text-indigo-950 font-bold uppercase tracking-wider pl-4 shrink-0 transition-colors"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {/* Tab Row Selector */}
         <div className="flex space-x-5 border-b border-[#F3F4F6] text-xs font-semibold mb-8">
           {([
@@ -1457,22 +1441,6 @@ export const GroupWorkspaceView: React.FC = () => {
           {activeTab === 'tasks' && (
             <div className="space-y-6 text-left">
               
-              {/* System Messages Banner */}
-              {toastMessage && (
-                <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3.5 flex items-center justify-between text-xs text-indigo-900 font-medium animate-fade-in">
-                  <div className="flex items-center space-x-2">
-                    <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
-                    <span>{toastMessage}</span>
-                  </div>
-                  <button 
-                    onClick={() => setToastMessage(null)} 
-                    className="text-[10px] text-indigo-500 hover:text-indigo-950 font-bold uppercase tracking-wider pl-4 shrink-0 transition-colors"
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              )}
-
               {/* SECTION 1: WORKLOAD SUGGESTION ENGINE / BUILDER */}
               <div className="bg-white border border-[#E5E7EB] rounded-2xl p-5 md:p-6 space-y-5">
                 <div className="flex items-center justify-between border-b border-[#F3F4F6] pb-3 mb-1">
@@ -1837,6 +1805,8 @@ export const GroupWorkspaceView: React.FC = () => {
                           const userWhoClaimed = Object.keys(claimedRoleIds).find(mId => claimedRoleIds[mId] === role.id);
                           const claimedMemberObj = members.find(m => m.id === userWhoClaimed);
                           const isClaimedByMe = userWhoClaimed === currentUser.id;
+                          // True when the current user has already claimed a DIFFERENT role
+                          const isClaimedByCurrentUserAlready = currentUser.id in claimedRoleIds;
 
                           return (
                             <div 
@@ -1990,16 +1960,65 @@ export const GroupWorkspaceView: React.FC = () => {
                                     Confirm draft to enable claiming
                                   </div>
                                 ) : claimedMemberObj ? (
-                                  <div className="text-center py-2 text-[10px] font-bold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg">
-                                    ✓ Claimed by {claimedMemberObj.name}
+                                  // Already assigned — show who has it, with an unassign option
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 flex-1">
+                                      <span className={`w-4 h-4 rounded-full ${claimedMemberObj.color} text-white flex items-center justify-center text-[8px] font-bold shrink-0`}>
+                                        {claimedMemberObj.avatar}
+                                      </span>
+                                      ✓ {claimedMemberObj.name.split(' ')[0]}
+                                    </div>
+                                    <button
+                                      onClick={() => {
+                                        const updated = Object.fromEntries(
+                                          Object.entries(claimedRoleIds).filter(([mId]) => mId !== claimedMemberObj.id)
+                                        );
+                                        setClaimedRoleIds(updated);
+                                      }}
+                                      className="text-[9px] text-slate-400 hover:text-red-500 border border-slate-200 rounded-lg px-2 py-1.5 transition-colors cursor-pointer"
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                ) : isClaimedByCurrentUserAlready && role.id !== claimedRoleIds[currentUser.id] ? (
+                                  // Current user already claimed a different role — show member picker
+                                  <div className="space-y-1.5">
+                                    <p className="text-[9px] text-slate-500 font-mono uppercase font-bold">Assign to:</p>
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {members
+                                        .filter(m => m.id !== currentUser.id)
+                                        .map(m => {
+                                          const alreadyAssigned = Object.values(claimedRoleIds).includes(role.id);
+                                          const memberHasOtherRole = Object.keys(claimedRoleIds).includes(m.id) && claimedRoleIds[m.id] !== role.id;
+                                          return (
+                                            <button
+                                              key={m.id}
+                                              onClick={() => handleAssignRole(m.id, role.id)}
+                                              disabled={memberHasOtherRole}
+                                              title={memberHasOtherRole ? `${m.name} already has a role` : `Assign to ${m.name}`}
+                                              className={`flex items-center gap-1 px-2 py-1 rounded-full text-[9px] font-bold border transition-all cursor-pointer ${
+                                                memberHasOtherRole
+                                                  ? 'opacity-30 cursor-not-allowed border-slate-100 bg-white text-slate-400'
+                                                  : 'border-slate-200 bg-white hover:border-[#4F46E5] hover:bg-indigo-50 text-slate-700'
+                                              }`}
+                                            >
+                                              <span className={`w-3.5 h-3.5 rounded-full ${m.color} text-white flex items-center justify-center text-[7px] font-bold`}>
+                                                {m.avatar}
+                                              </span>
+                                              {m.name.split(' ')[0]}
+                                            </button>
+                                          );
+                                        })
+                                      }
+                                    </div>
                                   </div>
                                 ) : (
+                                  // Current user hasn't claimed any role yet
                                   <button
                                     onClick={() => handleClaimRole(role.id)}
-                                    disabled={isTeammatesClaiming}
-                                    className="cursor-pointer w-full bg-[#111111] hover:bg-[#4F46E5] disabled:bg-slate-200 disabled:text-slate-400 text-white text-[10px] font-bold py-2 rounded-lg transition-colors text-center"
+                                    className="cursor-pointer w-full bg-[#111111] hover:bg-[#4F46E5] text-white text-[10px] font-bold py-2 rounded-lg transition-colors text-center"
                                   >
-                                    {isTeammatesClaiming ? "Coordinating claim..." : "Claim Role Workload"}
+                                    Claim This Role
                                   </button>
                                 )}
                               </div>
@@ -2008,9 +2027,38 @@ export const GroupWorkspaceView: React.FC = () => {
                         })}
                       </div>
 
+                      {/* Split & Push Tasks confirm button — only after all roles are assigned */}
+                      {isWorkloadConfirmed && (() => {
+                        const totalRoles = activeDistribution.length;
+                        const assignedCount = Object.keys(claimedRoleIds).length;
+                        const allAssigned = assignedCount === totalRoles;
+                        return (
+                          <div className="mt-6 pt-5 border-t border-slate-100">
+                            <div className="flex items-center justify-between mb-3">
+                              <p className="text-[11px] text-slate-500">
+                                <span className={`font-bold ${ allAssigned ? 'text-emerald-600' : 'text-amber-600' }`}>
+                                  {assignedCount}/{totalRoles} roles assigned
+                                </span>
+                                {!allAssigned && ` — assign all roles above to unlock`}
+                              </p>
+                            </div>
+                            <button
+                              onClick={handleConfirmAndSplitTasks}
+                              disabled={!allAssigned}
+                              className={`w-full py-3 rounded-xl text-[11px] font-extrabold tracking-wide transition-all ${
+                                allAssigned
+                                  ? 'bg-[#4F46E5] hover:bg-[#4338CA] text-white cursor-pointer shadow-md shadow-indigo-200'
+                                  : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                              }`}
+                            >
+                              {allAssigned ? `✓ Split & Push ${activeDistribution.reduce((sum, r) => sum + r.subtasks.length, 0)} Tasks to Kanban` : `Assign all ${totalRoles} roles to continue`}
+                            </button>
+                          </div>
+                        );
+                      })()}
+
                     </div>
                   )}
-
 
                 </div>
               </div>

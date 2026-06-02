@@ -4,7 +4,7 @@ import { Event, MeetingPoll } from '../types';
 import { Calendar, Users, Plus, Check, Trash2, X, Clock, HelpCircle, Save, Info } from 'lucide-react';
 
 export const CalendarMeetingsView: React.FC = () => {
-  const { events, polls, members, currentUser, votePollSlot, createMeetingPoll, addEvent } = useProject();
+  const { events, polls, members, currentUser, votePollSlot, closePoll, createMeetingPoll, addEvent } = useProject();
 
   // Selected date trigger for local filters
   const [selectedDay, setSelectedDay] = useState<number | null>(24);
@@ -304,11 +304,75 @@ export const CalendarMeetingsView: React.FC = () => {
                         })}
                       </div>
 
-                      {/* Info footer metadata */}
-                      <div className="mt-4 pt-3 border-t border-slate-200/40 text-[10px] text-slate-400 flex justify-between items-center font-semibold">
-                        <span>Created by: {pollCreator?.name}</span>
-                        <span>Expiration: {new Date(poll.deadline).toLocaleDateString()}</span>
-                      </div>
+                      {/* Vote footer — progress + Close Poll button */}
+                      {(() => {
+                        const totalMembers = members.length;
+                        const votedIds = new Set(poll.proposedSlots.flatMap(s => s.votedMemberIds));
+                        const votedCount = votedIds.size;
+                        const hasIVoted = poll.proposedSlots.some(s => s.votedMemberIds.includes(currentUser.id));
+                        const allVoted = votedCount >= totalMembers;
+
+                        // Preview: slot with highest votes so far
+                        let leadSlot = poll.proposedSlots[0];
+                        poll.proposedSlots.forEach(s => {
+                          if (s.votedMemberIds.length > leadSlot.votedMemberIds.length) leadSlot = s;
+                        });
+
+                        return (
+                          <div className="mt-4 pt-3 border-t border-slate-200/40 space-y-2.5">
+                            {/* Vote progress bar */}
+                            <div className="flex items-center justify-between text-[10px] font-semibold text-slate-500">
+                              <span>
+                                <span className={`font-bold ${ allVoted ? 'text-emerald-600' : hasIVoted ? 'text-indigo-600' : 'text-amber-600'}`}>
+                                  {votedCount}/{totalMembers} voted
+                                </span>
+                                {!allVoted && !hasIVoted && " — cast your vote above"}
+                                {hasIVoted && !allVoted && " — waiting for others"}
+                                {allVoted && " — all members voted!"}
+                              </span>
+                              <span className="text-slate-400 text-[9px] font-mono">Expires: {new Date(poll.deadline).toLocaleDateString()}</span>
+                            </div>
+                            <div className="w-full bg-slate-100 rounded-full h-1">
+                              <div
+                                className="bg-indigo-500 h-1 rounded-full transition-all"
+                                style={{ width: `${totalMembers > 0 ? (votedCount / totalMembers) * 100 : 0}%` }}
+                              />
+                            </div>
+
+                            {/* Leading slot preview */}
+                            {leadSlot.votedMemberIds.length > 0 && (
+                              <p className="text-[10px] text-slate-500">
+                                Current lead: <span className="font-bold text-slate-700">"{leadSlot.time}"</span> with {leadSlot.votedMemberIds.length} vote(s)
+                              </p>
+                            )}
+
+                            {/* Close Poll & Schedule button */}
+                            <button
+                              onClick={() => closePoll(poll.id)}
+                              disabled={leadSlot.votedMemberIds.length === 0}
+                              className={`cursor-pointer w-full py-2.5 rounded-xl text-[11px] font-extrabold transition-all ${
+                                leadSlot.votedMemberIds.length === 0
+                                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                  : allVoted
+                                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-200'
+                                  : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                              }`}
+                            >
+                              {allVoted
+                                ? `✓ Close Poll & Schedule — "${leadSlot.time}"`
+                                : leadSlot.votedMemberIds.length === 0
+                                ? 'Vote on a slot to close the poll'
+                                : `Close Poll Early & Schedule — "${leadSlot.time}"`
+                              }
+                            </button>
+
+                            {/* Created by */}
+                            <div className="text-[10px] text-slate-400 font-semibold text-right">
+                              Created by: {members.find(m => m.id === poll.createdBy)?.name || 'Unknown'}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   );
                 })
