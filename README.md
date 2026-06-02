@@ -4,6 +4,15 @@ A centralized, real-time collaboration and accountability platform tailored for 
 
 🔗 **Live Production Deployment**: [https://0-mess.vercel.app](https://0-mess.vercel.app)
 
+> [!WARNING]
+> **Known Issue — Live Deployment (Resource Upload & RAG Chatbot)**
+> The backend is hosted on [Render](https://render.com) in a region where Google's **Gemini Embedding API** (`gemini-embedding-2`) returns a `FAILED_PRECONDITION: User location is not supported` error.
+> This means:
+> - **Uploading a file** to the Resource Hub on the live site will return a 500 error.
+> - **The AI Chatbot** cannot perform vector similarity search on uploaded documents.
+>
+> ✅ **All features work fully when running locally** (see [Local Setup](#️-local-setup-and-installation) below). Please run the app locally to test the full RAG pipeline.
+
 ---
 
 ## 🚀 Key Features
