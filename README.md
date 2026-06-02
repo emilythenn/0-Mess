@@ -2,6 +2,8 @@
 
 A centralized, real-time collaboration and accountability platform tailored for university group assignments. **0-Mess** bridges the coordination gap in student teams by combining synchronized Kanban boards, smart meeting scheduling, anonymous peer review metrics, and an AI workspace helper (using RAG) into a single cohesive dashboard.
 
+🔗 **Live Production Deployment**: [https://0-mess.vercel.app](https://0-mess.vercel.app)
+
 ---
 
 ## 🚀 Key Features
@@ -163,6 +165,10 @@ This automatically triggers `npm install` inside both `/frontend` and `/backend`
 ---
 
 ## 🏃 Running the Application
+
+### Live Production Deployment
+* **Frontend Web Client (Vercel)**: [https://0-mess.vercel.app](https://0-mess.vercel.app)
+* **Backend API Gateway (Render)**: [https://zero-mess.onrender.com](https://zero-mess.onrender.com)
 
 ### Development Mode
 To launch both the backend server and frontend Vite hot-reload server concurrently, run:
