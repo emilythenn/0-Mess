@@ -35,6 +35,7 @@ interface ProjectContextType {
   joinGroupRequest: (groupId: string, password?: string) => Promise<{ success: boolean; message: string; requested?: boolean; passwordRequired?: boolean }>;
   approveJoinRequest: (groupId: string, userId: string) => void;
   declineJoinRequest: (groupId: string, userId: string) => void;
+  addMemberByEmail: (groupId: string, email: string) => Promise<{ success: boolean; message: string }>;
   setActiveGroupId: (groupId: string | null) => void;
   resetAllCaches: () => void;
   updateProfile: (profileData: Partial<Member>) => Promise<boolean>;
@@ -236,6 +237,11 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const res = await fetch('/api/project/groups', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (res.status === 401) {
+        console.warn('Session expired or unauthorized. Logging out.');
+        logout();
+        return;
+      }
       if (!res.ok) throw new Error('Database server error.');
       const data = await res.json();
       if (data.groups) {
@@ -257,10 +263,27 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const res = await fetch(`/api/project/groups/${groupId}/data`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      if (res.status === 401) {
+        console.warn('Session expired or unauthorized. Logging out.');
+        logout();
+        return;
+      }
       if (res.status === 404) {
         console.warn(`Group ${groupId} not found in database. Redirecting to dashboard.`);
         setActiveGroupId(null);
         setDbError(null);
+        return;
+      }
+      if (res.status === 403) {
+        console.warn(`Access denied to group ${groupId}. Redirecting to dashboard.`);
+        setActiveGroupId(null);
+        setDbError(null);
+        setTasks([]);
+        setCommits([]);
+        setFeedback([]);
+        setPolls([]);
+        setEvents([]);
+        setMembers([]);
         return;
       }
       if (!res.ok) throw new Error('Database loading failed.');
@@ -631,7 +654,23 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (!password) {
         throw new Error("Password is required for Supabase Authentication.");
       }
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const res = await fetch('/api/project/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Authentication failed.');
+      }
+      const { session } = await res.json();
+      if (!session) {
+        throw new Error('Failed to retrieve active session.');
+      }
+      const { error } = await supabase.auth.setSession({
+        access_token: session.access_token,
+        refresh_token: session.refresh_token
+      });
       if (error) throw error;
       return true;
     } catch (error: any) {
@@ -640,34 +679,64 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
-  const logout = async () => {
+  async function logout() {
     try {
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
-      setIsLoggedIn(false);
+
+      // Clear React state variables
+      setTasks([]);
+      setCommits([]);
+      setFeedback([]);
+      setPolls([]);
+      setEvents([]);
+      setNotifications([]);
+      setGroups([]);
+      setMembers([]);
+      setActiveGroupIdState(null);
+
+      // Clear local storage workspace caches
+      localStorage.removeItem('0mess_tasks');
+      localStorage.removeItem('0mess_commits');
+      localStorage.removeItem('0mess_feedback');
+      localStorage.removeItem('0mess_polls');
+      localStorage.removeItem('0mess_events');
+      localStorage.removeItem('0mess_notifications');
+      localStorage.removeItem('0mess_groups');
+      localStorage.removeItem('0mess_members');
+      localStorage.removeItem('0mess_active_group_id');
       localStorage.removeItem('firebase_id_token');
       localStorage.removeItem('0mess_logged_in');
       localStorage.removeItem('0mess_current_user');
+
+      setIsLoggedIn(false);
     } catch (error: any) {
       console.error("Supabase Sign Out Error:", error);
       throw error;
     }
-  };
+  }
 
   const register = async (name: string, email: string, role: string, password?: string) => {
     try {
       if (!password) {
         throw new Error("Password is required for Supabase Registration.");
       }
-      const { error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            full_name: name,
-            name: name
-          }
-        }
+      const res = await fetch('/api/project/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, password })
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Registration failed.');
+      }
+      const { session } = await res.json();
+      if (!session) {
+        throw new Error('Failed to retrieve active session.');
+      }
+      const { error } = await supabase.auth.setSession({
+        access_token: session.access_token,
+        refresh_token: session.refresh_token
       });
       if (error) throw error;
       return true;
@@ -1419,6 +1488,43 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     );
   };
 
+  const addMemberByEmail = async (groupId: string, email: string) => {
+    if (!navigator.onLine) {
+      return { success: false, message: 'Offline Mode: You must be online to add group members by email.' };
+    }
+
+    const token = localStorage.getItem('firebase_id_token');
+    try {
+      const res = await fetch(`/api/project/groups/${groupId}/members`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
+        body: JSON.stringify({ email })
+      });
+
+      const responseData = await res.json();
+      if (!res.ok) {
+        throw new Error(responseData.error || 'Failed to add member.');
+      }
+
+      // Refresh group details to reflect the new member in frontend state
+      await fetchGroupData(groupId, token || undefined);
+
+      addNotification(
+        'Member Added Directly',
+        `Successfully added ${email} to group workspace.`,
+        'success'
+      );
+
+      return { success: true, message: responseData.message || 'Member added successfully!' };
+    } catch (err: any) {
+      console.error('Error adding member by email:', err);
+      return { success: false, message: err.message || 'Failed to add member.' };
+    }
+  };
+
   const updateGroupSettings = async (
     groupId: string,
     updates: { name?: string; description?: string; evaluationDate?: string; newGroupId?: string; password?: string }
@@ -1629,6 +1735,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       joinGroupRequest,
       approveJoinRequest,
       declineJoinRequest,
+      addMemberByEmail,
       setActiveGroupId,
       resetAllCaches,
       updateProfile,

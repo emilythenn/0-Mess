@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useProject } from '../context/ProjectContext';
-import { Mail, User, Lock, AlertCircle, ArrowLeft, GraduationCap } from 'lucide-react';
+import { Mail, User, Lock, AlertCircle, ArrowLeft, GraduationCap, Eye, EyeOff } from 'lucide-react';
 
 interface AuthPageProps {
   onBack: () => void;
@@ -18,8 +18,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess, defaultMo
   });
   
   // Login Form States
-  const [loginEmail, setLoginEmail] = useState<string>('alex.mercer@univ.edu'); // Prefilled for easy sandbox testing
-  const [loginPassword, setLoginPassword] = useState<string>('password123'); // Prefilled password
+  const [loginEmail, setLoginEmail] = useState<string>(''); // Cleared prefilled email
+  const [loginPassword, setLoginPassword] = useState<string>(''); // Cleared prefilled password
   const [loginError, setLoginError] = useState<string>('');
 
   // Register Form States
@@ -30,6 +30,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess, defaultMo
 
   // Social Auth Spinner State
   const [googleLoading, setGoogleLoading] = useState<boolean>(false);
+
+  // Password visibility states
+  const [showLoginPassword, setShowLoginPassword] = useState<boolean>(false);
+  const [showRegPassword, setShowRegPassword] = useState<boolean>(false);
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -137,7 +141,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess, defaultMo
 
   const handlePrefillAccount = (email: string) => {
     setLoginEmail(email);
-    setLoginPassword('password123');
+    setLoginPassword('demoPassword123');
     setLoginError('');
   };
 
@@ -222,13 +226,20 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess, defaultMo
                     <Lock className="w-4 h-4" />
                   </span>
                   <input
-                    type="password"
+                    type={showLoginPassword ? "text" : "password"}
                     required
                     value={loginPassword}
                     onChange={(e) => { setLoginPassword(e.target.value); setLoginError(''); }}
                     placeholder="••••••••"
-                    className="w-full bg-[#FAFAFA] border border-[#E5E7EB] rounded-xl py-3 pl-9 pr-4 text-[#111111] text-xs focus:bg-white focus:border-[#4F46E5] focus:outline-hidden transition-all"
+                    className="w-full bg-[#FAFAFA] border border-[#E5E7EB] rounded-xl py-3 pl-9 pr-10 text-[#111111] text-xs focus:bg-white focus:border-[#4F46E5] focus:outline-hidden transition-all"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowLoginPassword(prev => !prev)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#888888] hover:text-[#111111] transition-all cursor-pointer"
+                  >
+                    {showLoginPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
                 </div>
               </div>
 
@@ -289,30 +300,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess, defaultMo
                 </button>
               </p>
 
-              {/* Prefill checklist */}
-              <div className="pt-4 border-t border-[#F3F4F6] mt-4 select-none">
-                <span className="block text-[9px] uppercase tracking-wider text-[#999999] font-mono text-center mb-2.5">
-                  Or select a demo profile below
-                </span>
-                <div className="grid grid-cols-2 gap-2">
-                  {members.slice(0, 4).map((m) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      onClick={() => handlePrefillAccount(m.email)}
-                      className="flex items-center space-x-2.5 p-2 bg-[#FAFAFA] hover:bg-indigo-50/50 border border-[#E5E7EB] hover:border-indigo-100 rounded-xl transition-all cursor-pointer text-left overflow-hidden"
-                    >
-                      <span className={`w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-mono font-bold text-white shrink-0 ${m.color}`}>
-                        {m.avatar}
-                      </span>
-                      <div className="min-w-0">
-                        <div className="font-bold text-xs text-[#111111] truncate">{m.name.split(' ')[0]}</div>
-                        <div className="text-[9px] text-[#888888] truncate">{m.role.split(' & ')[0]}</div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
+
             </form>
           ) : (
             /* CREATE ACCOUNT ENROLLMENT */
@@ -370,13 +358,20 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess, defaultMo
                     <Lock className="w-4 h-4" />
                   </span>
                   <input
-                    type="password"
+                    type={showRegPassword ? "text" : "password"}
                     required
                     value={regPassword}
                     onChange={(e) => { setRegPassword(e.target.value); setRegError(''); }}
                     placeholder="•••••••• (Min 6 characters)"
-                    className="w-full bg-[#FAFAFA] border border-[#E5E7EB] rounded-xl py-2.5 pl-9 pr-4 text-[#111111] text-xs focus:bg-white focus:border-[#4F46E5] focus:outline-hidden transition-all"
+                    className="w-full bg-[#FAFAFA] border border-[#E5E7EB] rounded-xl py-2.5 pl-9 pr-10 text-[#111111] text-xs focus:bg-white focus:border-[#4F46E5] focus:outline-hidden transition-all"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowRegPassword(prev => !prev)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#888888] hover:text-[#111111] transition-all cursor-pointer"
+                  >
+                    {showRegPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
                 </div>
               </div>
 

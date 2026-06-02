@@ -1,4 +1,4 @@
-import pdf from 'pdf-parse';
+import { PDFParse } from 'pdf-parse';
 import mammoth from 'mammoth';
 import { supabase } from '../config/supabase';
 import { EmbeddingService } from '../embeddings/embedding.service';
@@ -11,7 +11,8 @@ export class FileService {
     const ext = originalName.split('.').pop()?.toLowerCase();
     
     if (ext === 'pdf') {
-      const data = await pdf(buffer);
+      const parser = new PDFParse({ data: buffer });
+      const data = await parser.getText();
       return data.text;
     } else if (ext === 'docx') {
       const result = await mammoth.extractRawText({ buffer });

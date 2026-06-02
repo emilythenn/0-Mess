@@ -4,6 +4,65 @@ import { verifySupabaseToken, AuthenticatedRequest } from '../../middleware/auth
 
 const router = Router();
 
+// Public Auth Endpoints to proxy Supabase authentication and bypass client-side service_role key restrictions
+
+// POST /api/project/auth/login
+router.post('/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required.' });
+    }
+
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.json({ session: data.session });
+  } catch (error: any) {
+    console.error('Auth login error:', error);
+    res.status(500).json({ error: 'Internal server error during authentication.' });
+  }
+});
+
+// POST /api/project/auth/register
+router.post('/auth/register', async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    if (!name || !email || !password) {
+      return res.status(400).json({ error: 'Name, email and password are required.' });
+    }
+
+    // Use admin API to create user so they are auto-confirmed (helps with dummy emails)
+    const { data: createData, error: createError } = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { name }
+    });
+
+    if (createError) {
+      return res.status(400).json({ error: createError.message });
+    }
+
+    // Sign the user in to retrieve the active session token
+    const { data: sessionData, error: sessionError } = await supabase.auth.signInWithPassword({
+      email,
+      password
+    });
+
+    if (sessionError) {
+      return res.status(400).json({ error: sessionError.message });
+    }
+
+    res.json({ session: sessionData.session });
+  } catch (error: any) {
+    console.error('Auth register error:', error);
+    res.status(500).json({ error: 'Internal server error during registration.' });
+  }
+});
+
 // Helper utility to enrich group model with member IDs and pending requests
 async function enrichGroupDetails(groupData: any) {
   // Fetch member IDs from group_members
@@ -310,6 +369,90 @@ router.post('/groups/:id/join', verifySupabaseToken, async (req: AuthenticatedRe
     res.status(500).json({ error: err.message });
   }
 });
+
+// 4b. POST /api/project/groups/:id/members - Add member by email directly
+router.post('/groups/:id/members', verifySupabaseToken, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { email } = req.body;
+    const { uid } = req.user!;
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email address is required.' });
+    }
+
+    // Check if group exists
+    const { data: group, error: fetchErr } = await supabase
+      .from('groups')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (fetchErr || !group) {
+      return res.status(404).json({ error: 'Group workspace not found.' });
+    }
+
+    // Check if requester is group owner or member
+    const { data: isMember } = await supabase
+      .from('group_members')
+      .select('*')
+      .eq('group_id', id)
+      .eq('user_id', uid)
+      .maybeSingle();
+
+    if (group.owner_id !== uid && !isMember) {
+      return res.status(403).json({ error: 'Access denied. You must be a member of this group to add others.' });
+    }
+
+    // Find profile by email
+    const { data: profile, error: profileErr } = await supabase
+      .from('profiles')
+      .select('id, name, email')
+      .eq('email', email)
+      .maybeSingle();
+
+    if (profileErr) throw profileErr;
+
+    if (!profile) {
+      return res.status(404).json({ error: `User with email "${email}" not found.` });
+    }
+
+    // Check if target user is already a member
+    const { data: targetIsMember } = await supabase
+      .from('group_members')
+      .select('*')
+      .eq('group_id', id)
+      .eq('user_id', profile.id)
+      .maybeSingle();
+
+    if (targetIsMember) {
+      return res.status(400).json({ error: 'User is already a member of this group.' });
+    }
+
+    // Insert user into group_members
+    const { error: memberErr } = await supabase
+      .from('group_members')
+      .insert({
+        group_id: id,
+        user_id: profile.id
+      });
+
+    if (memberErr) throw memberErr;
+
+    // Delete any pending request for this user
+    await supabase
+      .from('group_join_requests')
+      .delete()
+      .eq('group_id', id)
+      .eq('user_id', profile.id);
+
+    res.json({ success: true, message: `Successfully added ${profile.name} to the group!` });
+  } catch (err: any) {
+    console.error('Error adding group member by email:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 // 5. POST /api/project/groups/:id/requests/:userId/approve - Approve join request
 router.post('/groups/:id/requests/:userId/approve', verifySupabaseToken, async (req: AuthenticatedRequest, res: Response) => {

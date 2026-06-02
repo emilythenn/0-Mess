@@ -4,7 +4,7 @@ import { Task, Member, Commit, MeetingPoll, Event } from '../types';
 import { 
   FileText, Cpu, CheckCircle, Clock, Calendar, Sparkles, 
   Plus, Upload, Shield, ChevronRight, Mail, Compass, HelpCircle,
-  ExternalLink, UserCheck, CheckSquare, MessageSquare, PlusCircle, Trash, Play, AlertCircle, Eye, EyeOff, Pencil, Key, RefreshCw, WifiOff
+  ExternalLink, UserCheck, CheckSquare, MessageSquare, PlusCircle, Trash, Play, AlertCircle, Eye, EyeOff, Pencil, Key, RefreshCw, WifiOff, UserPlus
 } from 'lucide-react';
 
 const renderFormattedMessage = (text: string, role: 'user' | 'model') => {
@@ -111,6 +111,7 @@ export const GroupWorkspaceView: React.FC = () => {
     submitFeedback,
     approveJoinRequest,
     declineJoinRequest,
+    addMemberByEmail,
     updateGroupEvaluationDate,
     updateGroupSettings,
     dbError,
@@ -123,6 +124,12 @@ export const GroupWorkspaceView: React.FC = () => {
   // Course evaluation date editing states
   const [isEditingEvalDate, setIsEditingEvalDate] = useState<boolean>(false);
   const [tempEvalDate, setTempEvalDate] = useState<string>('');
+
+  // Add Member by Email states
+  const [addMemberEmail, setAddMemberEmail] = useState<string>('');
+  const [isAddingMember, setIsAddingMember] = useState<boolean>(false);
+  const [addMemberError, setAddMemberError] = useState<string | null>(null);
+  const [addMemberSuccess, setAddMemberSuccess] = useState<string | null>(null);
   
   // Collapsible AI panel toggle
   const [showAiPanel, setShowAiPanel] = useState<boolean>(true);
@@ -155,10 +162,7 @@ export const GroupWorkspaceView: React.FC = () => {
   const [isSendingToAi, setIsSendingToAi] = useState<boolean>(false);
   
   // Assignment Upload Simulator state
-  const [uploadedFile, setUploadedFile] = useState<{ name: string; size: string; text?: string } | null>({
-    name: "CS402_Project_Syllabus.pdf",
-    size: "240 KB"
-  });
+  const [uploadedFile, setUploadedFile] = useState<{ name: string; size: string; text?: string } | null>(null);
 
   
   const [dragActive, setDragActive] = useState<boolean>(false);
@@ -193,12 +197,7 @@ export const GroupWorkspaceView: React.FC = () => {
   ]);
 
   // Resources state
-  const [resources, setResources] = useState([
-    { id: "r_1", title: "Shared Google Drive Folder", type: "Google Drive", category: "Google Drive", url: "https://drive.google.com", date: "Mapped 2 days ago", author: "Alex" },
-    { id: "r_2", title: "Figma Interactive Mockup Canvas", type: "Figma", category: "Figma", url: "https://figma.com", date: "Mapped 3 days ago", author: "Sophia" },
-    { id: "r_3", title: "Project Shared Code & Works", type: "GitHub", category: "GitHub", url: "https://github.com", date: "Mapped 1 day ago", author: "Liam" },
-    { id: "r_4", title: "Raft Paper Official Specification Document", type: "Documents", category: "Documents", url: "https://raft.github.io/raft.pdf", date: "Uploaded 5 days ago", author: "Mia" }
-  ]);
+  const [resources, setResources] = useState<any[]>([]);
 
   // Add Resource state
   const [showAddResource, setShowAddResource] = useState<boolean>(false);
@@ -233,9 +232,9 @@ export const GroupWorkspaceView: React.FC = () => {
 
   // AI Planner & Task Completion state variables
   const [activeWorkloadTab, setActiveWorkloadTab] = useState<'board' | 'aiPlanner'>('board');
-  const [inputTeamSize, setInputTeamSize] = useState<number>(5);
+  const [inputTeamSize, setInputTeamSize] = useState<number | string>(5);
   const [inputDeadline, setInputDeadline] = useState<string>('2026-06-05');
-  const [inputRequirements, setInputRequirements] = useState<string>('Implement leader election protocol states, split-brain testing simulation scripts, RocksDB consensus logs serialize, compaction checkpoints and live node visualizer monitors.');
+  const [inputRequirements, setInputRequirements] = useState<string>('');
   const [isGeneratingDistribution, setIsGeneratingDistribution] = useState<boolean>(false);
   const [activeDistribution, setActiveDistribution] = useState<null | any[]>(null);
   const [claimedRoleIds, setClaimedRoleIds] = useState<Record<string, string>>({});
@@ -274,10 +273,13 @@ export const GroupWorkspaceView: React.FC = () => {
   }, [currentUser]);
 
   useEffect(() => {
-    if (members && members.length > 0 && inputTeamSize > members.length) {
-      setInputTeamSize(members.length);
+    if (members && members.length > 0) {
+      const parsedSize = parseInt(inputTeamSize.toString()) || 1;
+      if (parsedSize > members.length) {
+        setInputTeamSize(members.length);
+      }
     }
-  }, [members, inputTeamSize]);
+  }, [members]);
 
   const currentGroupObj = groups.find(g => g.id === activeGroupId) || groups[0];
 
@@ -356,10 +358,22 @@ export const GroupWorkspaceView: React.FC = () => {
       });
       if (response.ok) {
         const data = await response.json();
+        const filesList = data.files || [];
+        
+        // Auto-select first document file (where url is '#' or empty) if none is currently selected
+        const docFile = filesList.find((f: any) => !f.url || f.url === '#');
+        if (docFile && !selectedDescriptionFileId) {
+          setSelectedDescriptionFileId(docFile.id);
+          setUploadedFile({
+            name: docFile.name,
+            size: docFile.size || "Resource Hub Document"
+          });
+        }
+
         setResources(prev => {
           // Keep only static links (whose IDs start with r_ and are not database files)
           const staticResources = prev.filter(r => r.id.startsWith('r_') && !(r as any).dbId);
-          const dbResources = (data.files || []).map((file: any) => {
+          const dbResources = filesList.map((file: any) => {
             const isLink = file.url && file.url !== '#';
             const dateStr = file.updated_at
               ? `Edited ${new Date(file.updated_at).toLocaleDateString()} ${new Date(file.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
@@ -408,6 +422,13 @@ export const GroupWorkspaceView: React.FC = () => {
         throw new Error(errorData.error || 'Failed to delete file.');
       }
       setToastMessage("File successfully deleted and removed from AI knowledge base.");
+      
+      // If deleted file was selected as active spec file, clear the select state
+      if (selectedDescriptionFileId === dbId) {
+        setSelectedDescriptionFileId('');
+        setUploadedFile(null);
+      }
+
       setResources(prev => prev.filter(r => r.id !== resId));
     } catch (err: any) {
       console.error('Failed to delete file:', err);
@@ -416,6 +437,19 @@ export const GroupWorkspaceView: React.FC = () => {
   };
 
   useEffect(() => {
+    if (activeGroupId === 'CS402-G4') {
+      setResources([
+        { id: "r_1", title: "Shared Google Drive Folder", type: "Google Drive", category: "Google Drive", url: "https://drive.google.com", date: "Mapped 2 days ago", author: "Alex" },
+        { id: "r_2", title: "Figma Interactive Mockup Canvas", type: "Figma", category: "Figma", url: "https://figma.com", date: "Mapped 3 days ago", author: "Sophia" },
+        { id: "r_3", title: "Project Shared Code & Works", type: "GitHub", category: "GitHub", url: "https://github.com", date: "Mapped 1 day ago", author: "Liam" },
+        { id: "r_4", title: "Raft Paper Official Specification Document", type: "Documents", category: "Documents", url: "https://raft.github.io/raft.pdf", date: "Uploaded 5 days ago", author: "Mia" }
+      ]);
+      setUploadedFile(null);
+    } else {
+      setResources([]);
+      setUploadedFile(null);
+    }
+
     if (activeGroupId) {
       fetchUploadedFiles();
     }
@@ -457,6 +491,17 @@ export const GroupWorkspaceView: React.FC = () => {
 
   // AI Workload Distribution API call
   const handleSuggestWorkloadDistribution = async () => {
+    let finalTeamSize = parseInt(inputTeamSize.toString()) || 1;
+    if (members && members.length > 0) {
+      if (finalTeamSize > members.length) {
+        alert(`The number of roles (${finalTeamSize}) cannot exceed the number of members in your group (${members.length}). It will be automatically set to ${members.length}.`);
+        finalTeamSize = members.length;
+      } else {
+        finalTeamSize = Math.max(1, finalTeamSize);
+      }
+    }
+    setInputTeamSize(finalTeamSize);
+
     setIsGeneratingDistribution(true);
     setGenerationProgress(20);
     setToastMessage("Contacting AI task splitting service...");
@@ -479,7 +524,7 @@ export const GroupWorkspaceView: React.FC = () => {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          teamSize: inputTeamSize,
+          teamSize: finalTeamSize,
           deadline: inputDeadline,
           requirements: inputRequirements,
           fileId: selectedDescriptionFileId || null
@@ -506,6 +551,17 @@ export const GroupWorkspaceView: React.FC = () => {
   // Regenerate workload with feedback suggestion
   const handleRegenerateWorkload = async () => {
     if (!activeDistribution) return;
+    let finalTeamSize = parseInt(inputTeamSize.toString()) || 1;
+    if (members && members.length > 0) {
+      if (finalTeamSize > members.length) {
+        alert(`The number of roles (${finalTeamSize}) cannot exceed the number of members in your group (${members.length}). It will be automatically set to ${members.length}.`);
+        finalTeamSize = members.length;
+      } else {
+        finalTeamSize = Math.max(1, finalTeamSize);
+      }
+    }
+    setInputTeamSize(finalTeamSize);
+
     setIsGeneratingDistribution(true);
     setGenerationProgress(30);
     setToastMessage("Sending feedback suggestions to AI...");
@@ -526,7 +582,7 @@ export const GroupWorkspaceView: React.FC = () => {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          teamSize: inputTeamSize,
+          teamSize: finalTeamSize,
           deadline: inputDeadline,
           requirements: inputRequirements,
           fileId: selectedDescriptionFileId || null,
@@ -852,6 +908,31 @@ export const GroupWorkspaceView: React.FC = () => {
     setPollTitle('');
     setPollDesc('');
     setProposedSlots([]);
+  };
+
+  const handleAddMember = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!addMemberEmail.trim()) return;
+
+    setIsAddingMember(true);
+    setAddMemberError(null);
+    setAddMemberSuccess(null);
+
+    try {
+      const currentGroupId = activeGroupId || 'CS402-G4';
+      const result = await addMemberByEmail(currentGroupId, addMemberEmail.trim());
+      if (result.success) {
+        setAddMemberSuccess(result.message);
+        setAddMemberEmail('');
+        setTimeout(() => setAddMemberSuccess(null), 5000);
+      } else {
+        setAddMemberError(result.message);
+      }
+    } catch (err: any) {
+      setAddMemberError(err.message || 'An unexpected error occurred.');
+    } finally {
+      setIsAddingMember(false);
+    }
   };
 
   const handleAddProposedSlot = () => {
@@ -1470,7 +1551,7 @@ export const GroupWorkspaceView: React.FC = () => {
                             <div className="flex space-x-1.5">
                               <button
                                 type="button"
-                                onClick={() => { setFileSourceMode('upload'); setSelectedDescriptionFileId(''); }}
+                                onClick={() => { setFileSourceMode('upload'); setSelectedDescriptionFileId(''); setUploadedFile(null); }}
                                 className={`text-[8px] font-bold px-1.5 py-0.5 rounded cursor-pointer transition-all ${
                                   fileSourceMode === 'upload' ? 'bg-[#4F46E5] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                                 }`}
@@ -1479,7 +1560,7 @@ export const GroupWorkspaceView: React.FC = () => {
                               </button>
                               <button
                                 type="button"
-                                onClick={() => setFileSourceMode('hub')}
+                                onClick={() => { setFileSourceMode('hub'); setSelectedDescriptionFileId(''); setUploadedFile(null); }}
                                 className={`text-[8px] font-bold px-1.5 py-0.5 rounded cursor-pointer transition-all ${
                                   fileSourceMode === 'hub' ? 'bg-[#4F46E5] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                                 }`}
@@ -1559,14 +1640,20 @@ export const GroupWorkspaceView: React.FC = () => {
                             max={members.length}
                             value={inputTeamSize} 
                             onChange={(e) => {
-                              const val = parseInt(e.target.value) || 1;
-                              if (val > members.length) {
+                              const val = e.target.value;
+                              setInputTeamSize(val === '' ? '' : parseInt(val));
+                            }} 
+                            onBlur={() => {
+                              const parsed = parseInt(inputTeamSize.toString());
+                              if (isNaN(parsed) || parsed < 1) {
+                                setInputTeamSize(1);
+                              } else if (parsed > members.length) {
                                 setToastMessage(`Number of roles cannot exceed active group members (${members.length}).`);
                                 setInputTeamSize(members.length);
                               } else {
-                                setInputTeamSize(val);
+                                setInputTeamSize(parsed);
                               }
-                            }} 
+                            }}
                             className="w-full bg-white border border-[#E5E7EB] p-2.5 rounded-lg text-xs font-sans font-medium focus:border-[#4F46E5] focus:ring-1 focus:ring-[#4F46E5] outline-none"
                           />
                         </div>
@@ -2776,6 +2863,73 @@ export const GroupWorkspaceView: React.FC = () => {
                         </button>
                       );
                     })}
+                  </div>
+
+                  {/* Add Teammate Card */}
+                  <div className="bg-white border border-[#E5E7EB] rounded-2xl p-4.5 space-y-3.5 shadow-2xs mt-4">
+                    <div className="flex items-center space-x-2 border-b border-[#F3F4F6] pb-2.5">
+                      <UserPlus className="w-4 h-4 text-[#4F46E5]" />
+                      <h4 className="font-extrabold text-[#111111] text-xs uppercase tracking-wider font-mono">Add Teammate</h4>
+                    </div>
+
+                    <form onSubmit={handleAddMember} className="space-y-3">
+                      <div>
+                        <label htmlFor="member-email" className="block text-[10px] font-bold text-[#666666] uppercase tracking-wider mb-1">
+                          Email Address
+                        </label>
+                        <div className="relative">
+                          <input
+                            id="member-email"
+                            type="email"
+                            required
+                            placeholder="teammate@0mess.com"
+                            value={addMemberEmail}
+                            onChange={(e) => {
+                              setAddMemberEmail(e.target.value);
+                              if (addMemberError) setAddMemberError(null);
+                            }}
+                            className="w-full bg-[#FAFAFA] border border-[#E5E7EB] hover:border-[#CCCCCC] focus:border-[#4F46E5] focus:bg-white rounded-xl px-3 py-2 text-xs transition-all outline-hidden pr-8"
+                          />
+                          <Mail className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
+                        </div>
+                      </div>
+
+                      {addMemberError && (
+                        <div className="text-[10px] text-rose-600 bg-rose-50/50 border border-rose-100 rounded-lg p-2 flex items-start space-x-1.5 animate-fade-in">
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                          <span>{addMemberError}</span>
+                        </div>
+                      )}
+
+                      {addMemberSuccess && (
+                        <div className="text-[10px] text-emerald-700 bg-emerald-50/50 border border-emerald-100 rounded-lg p-2 flex items-start space-x-1.5 animate-fade-in">
+                          <CheckCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                          <span>{addMemberSuccess}</span>
+                        </div>
+                      )}
+
+                      <button
+                        type="submit"
+                        disabled={isAddingMember}
+                        className={`w-full text-xs font-bold py-2 px-3 rounded-xl cursor-pointer text-white transition-all shadow-2xs flex items-center justify-center space-x-1.5 ${
+                          isAddingMember 
+                            ? 'bg-slate-400 cursor-not-allowed' 
+                            : 'bg-[#4F46E5] hover:bg-[#4338CA] hover:shadow-xs active:scale-[0.98]'
+                        }`}
+                      >
+                        {isAddingMember ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            <span>Adding...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>Add Member</span>
+                          </>
+                        )}
+                      </button>
+                    </form>
                   </div>
                 </div>
 
