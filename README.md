@@ -7,6 +7,7 @@ A centralized, real-time collaboration and accountability platform tailored for 
 ## 🚀 Key Features
 
 * **Unified Course Workspaces**: Create or join project teams using password-secured group codes.
+* **Direct Teammate Enrollment**: Add registered students to group workspaces instantly by entering their email address (bypassing code/request approvals).
 * **AI & Manual Workload Builder**: Split complex assignment requirements into fair task roles automatically using AI suggestions, or manually configure custom project roles and tasks.
 * **Teammate Claim Coordination**: Select and claim workspace roles to dynamically populate personal task checklists on the group Kanban board.
 * **Semantic AI Workspace Helper (RAG)**: Upload lecture notes, rubrics, or other files to let the workspace AI parse, index, and answer project-specific queries using vector embeddings.
@@ -17,7 +18,7 @@ A centralized, real-time collaboration and accountability platform tailored for 
 
 ---
 
-## 📡 Offline-First & Conflict Resolution System (Upgrade 2)
+## 📡 Offline-First & Conflict Resolution System
 
 **0-Mess** is built with a resilient offline-first architecture to handle unstable network environments and server downtime, ensuring students can keep tracking and updating their group project uninterrupted.
 
@@ -39,6 +40,39 @@ When offline modifications are synced back, the engine compares the local action
   [Merged Update]: [Client Offline Description Content]
   ```
 * **Deletion Precedence**: If a task was deleted on the server while the client was offline making edits to it, the offline updates are discarded to prevent ghost items.
+
+---
+
+## 🤖 Retrieval-Augmented Generation (RAG) & AI Workspace Engine
+
+The **0-Mess** workspace integrates a semantic RAG pipeline to help students extract deliverables and requirements from syllabus sheets, rubrics, and project briefs.
+
+* **Multi-Format Parsing**: Extracts raw text from uploaded PDF instructions (via modern `PDFParse`) and DOCX guides (via `Mammoth`).
+* **Semantic Splitting**: Segments parsed documents into overlapping text chunks to ensure context remains unbroken across boundaries.
+* **Supabase pgvector**: Leverages the PostgreSQL `pgvector` extension to store document chunk vectors.
+* **Cosine Similarity Querying**: Runs vector similarity searches on user queries to retrieve relevant context chunks before passing them to the Google Gemini API (`gemini-2.5-flash`).
+* **Exhaustive Workload Splitting**: Commands the AI model to identify all required assignment deliverables from the documents and evenly distribute tasks among active team members so no items are missed.
+
+---
+
+## ⚡ Real-Time Collaborative Synchronization
+
+The platform utilizes a reactive event-driven architecture to keep all active workspace screens synchronized without poll intervals.
+
+* **Supabase Realtime Channels**: Subscribes directly to PostgreSQL replication publications (`postgres_changes`) for tables including `tasks`, `commits`, `feedback`, `polls`, `events`, and `group_members`.
+* **Instant UI Reflected Modifications**: When any student moves a task card on the Kanban board, schedules a milestone, or joins the group, the change is broadcasted and rendered on all teammates' screens within milliseconds.
+
+---
+
+## 📊 Weighted Contribution Metrics Engine (Dynamic Accountability)
+
+To discourage "social loafing" (free-riding) in university group assignments, **0-Mess** implements a dynamic, multi-metric accountability algorithm.
+
+* **Unified Contribution Score**: Computes a dynamic score out of `10.0` for each student based on three distinct data sources:
+  - **40% Task Completion**: Ratio of completed tasks assigned to the member.
+  - **40% Git Commit Activity**: Volume of logged work updates (progress logs).
+  - **20% Anonymous Peer Evaluations**: Averaged ratings across Quality, Reliability, Communication, and Contribution submitted anonymously by teammates.
+* **Live Performance Visualization**: Displays scores in a clean interactive detail grid, highlighting active contributions and self-claimed workloads.
 
 ---
 
@@ -135,7 +169,7 @@ To launch both the backend server and frontend Vite hot-reload server concurrent
 ```bash
 npm run dev
 ```
-* **Frontend client**: http://localhost:3000
+* **Frontend client**: http://localhost:5173
 * **Backend API**: http://localhost:5001
 
 ### Production Build

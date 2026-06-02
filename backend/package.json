@@ -6,9 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js",
-    "seed:demo": "node verify_or_create_demo_users.js",
-    "check:tables": "node check_tables.js"
+    "start": "node dist/index.js"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
